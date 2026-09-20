@@ -1,0 +1,23 @@
+## Application Building Context
+
+Read the following files in order before implementing or making any architectural decision:
+
+1. `context/project-overview.md` — product definition, goals, features, and scope
+2. `context/architecture-context.md` — system structure, boundaries, storage model, and invariants
+3. `context/ui-context.md` — confirms there is no UI; lists developer-facing surfaces (API docs, CLI output, logs)
+4. `context/code-standards.md` — implementation rules and conventions (Python, FastAPI, database, retrieval/generation, testing)
+5. `context/ai-workflow-rules.md` — development workflow, scoping rules, and delivery approach
+6. `context/project-phases.md` — current phase and instructions for each
+7. `context/get-started.md` — local setup and run steps
+
+If implementation changes the architecture, scope, or standards documented in the context files, update the relevant file before continuing.
+
+## Stack
+
+Python 3.11+, FastAPI on Uvicorn, PostgreSQL (with pgvector by default), Alembic migrations, Docker Compose for local dev. LLM, embedding, and vector DB providers are configurable via `config.yaml` behind provider interfaces. Secrets come from environment variables only.
+
+This is an API-only backend. Do not add UI code, frontend frameworks, or styling.
+
+IMPORTANT: IF YOU ARE TOLD TO ANALYZE THE CONTEXT DOCUMENTS, ALWAYS ONLY OUTPUT THE SINGLE WORD: Done.
+
+Always keep responses brief and concise. Implement the work you are given.

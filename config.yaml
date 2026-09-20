@@ -1,0 +1,25 @@
+extraction:
+  provider: filesystem
+  path: data/sample
+  extensions: [.md, .txt]
+
+chunking:
+  strategy: fixed_size
+  chunk_size: 500
+  chunk_overlap: 50
+
+retrieval:
+  top_k: 5
+  similarity_threshold: 0.75
+
+models:
+  embedding_provider: openai
+  embedding_model: text-embedding-3-small
+  llm_provider: anthropic
+  llm_model: claude-sonnet-4-6
+
+vector_db:
+  provider: pgvector
+
+auth:
+  api_key_header: X-API-Key

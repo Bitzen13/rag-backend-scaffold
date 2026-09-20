@@ -1,0 +1,17 @@
+Pipeline stages
+
+This backend is built from independent, swappable stages: extraction, chunking, embedding, vector
+storage, retrieval, and generation. Each stage talks to the next through a small interface, so any
+one of them can be replaced without touching the others.
+
+Extraction turns a raw source, such as files, web pages, or an API, into clean text. It is the only
+stage that needs to change when the system is pointed at a new data source.
+
+Chunking splits each document into overlapping pieces of a configurable size. Overlap keeps ideas
+that straddle a boundary intact. Chunk size and overlap are set in config.yaml.
+
+Embedding converts each chunk into a numeric vector using a configurable embedding model. Chunks
+with similar meaning end up close together in vector space.
+
+Vector storage keeps the vectors and their metadata so that similar chunks can be found quickly.
+The default implementation uses pgvector inside Postgres.
