@@ -1,6 +1,9 @@
 extraction:
   provider: filesystem
   path: data/sample
+  # Which files are picked up. A reader is chosen per extension (extraction/readers/registry.py):
+  # .pdf, .md, .html, .docx, .csv/.tsv, .xlsx, .json/.yaml, .eml/.mbox, source code, and plain
+  # text as the fallback for anything else.
   extensions: [.md, .txt, .pdf]
   # Corpus-specific cleanup for text extracted from PDFs. These are regular expressions and do not
   # affect how structure (headings, tables, columns) is detected, which is worked out per file.
@@ -12,14 +15,30 @@ extraction:
       - 'Template:'              # unrendered wiki templates
     skip_sections:               # sections left out entirely (by heading text)
       - References
+    borderless_tables: true      # also detect tables aligned with whitespace, not ruling lines
+    ocr:                         # read pages that are an image of text (needs Tesseract)
+      enabled: false
+      language: eng
+      min_characters: 20         # a page with fewer characters than this looks scanned
+      resolution: 300
 
 chunking:
+  # Sizes are in tokens of the embedding model below, counted with its own tokenizer.
   chunk_size: 500
   chunk_overlap: 50
+  max_chunk_tokens: 7781         # hard cap per chunk; must stay under the model's input limit
+  tokenizer: auto                # auto (the embedding model's tokenizer) | words
+  prose_splitting: sentence      # paragraph | sentence - where document_aware cuts long prose
   # Pick a strategy for EACH document (key = path relative to extraction.path). A document that
-  # is not listed here is not ingested. Strategies: fixed_size | document_aware
+  # is not listed here is not ingested. Strategies: fixed_size | document_aware.
+  # A document may instead be given a mapping to override chunk_size, chunk_overlap or
+  # prose_splitting for that file alone:
+  #   report.pdf:
+  #     strategy: document_aware
+  #     chunk_size: 400
+  #     prose_splitting: paragraph
   documents:
-    rag-overview.md: fixed_size
+    rag-overview.md: document_aware
     pipeline-stages.txt: fixed_size
     List_of_largest_stars.pdf: document_aware
     Space_exploration.pdf: document_aware

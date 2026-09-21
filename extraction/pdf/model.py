@@ -25,6 +25,7 @@ class TableBlock:
     x1: float
     bottom: float
     rows: list[list[str | None]]
+    borderless: bool = False  # found from alignment rather than from ruling lines
 
     @property
     def ncols(self) -> int:
@@ -40,3 +41,4 @@ class PageFlow:
     height: float
     items: list[Line | TableBlock] = field(default_factory=list)
     has_images: bool = False  # true with no text at all suggests a scanned page
+    ocr: bool = False  # the page's text came from OCR rather than from the PDF itself

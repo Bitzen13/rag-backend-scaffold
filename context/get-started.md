@@ -5,6 +5,7 @@
 - Docker + Docker Compose (for local Postgres/vector DB)
 - An API key for your chosen LLM provider (Anthropic/OpenAI)
 - An API key for your chosen embedding provider (if different from the LLM provider)
+- Optional, only for OCR of scanned PDF pages: the Tesseract binary on PATH, plus `pip install pytesseract`
 
 ## Steps
 
@@ -32,22 +33,42 @@
    (Reads `DATABASE_URL`; a plain `postgresql://` URL is fine, the async driver is applied automatically.)
 
 6. **Configure the pipeline**
-   Edit config.yaml to set chunk size/overlap, top_k, and model choices. Every document to ingest must be listed under `chunking.documents` with its strategy (`fixed_size` or `document_aware`). Preview chunks first with `python scripts/ingest.py --dry-run` (writes to `chunked/`).
+   Edit config.yaml to set chunk size/overlap (in tokens), top_k, and model choices. Every document to ingest must be listed under `chunking.documents` with its strategy (`fixed_size` or `document_aware`), optionally with per-document sizes. `context/chunking-guide.md` is the decision guide.
 
-7. **Implement/configure the extraction module**
-   Set `extraction.path` in config.yaml (default: the `data/sample` documents), or add a new extractor in extraction/.
+7. **Configure the extraction module**
+   Set `extraction.path` (default: the `data/sample` documents) and `extraction.extensions`. A reader is chosen per extension — PDF, Markdown, HTML, DOCX, CSV, Excel, JSON, YAML, email, source code, and plain text for anything else — so most formats need no code. To add one, see `context/adding-a-reader.md`.
 
-8. **Ingest your data**
+8. **Check the chunks before storing anything**
+   python scripts/ingest.py --dry-run
+   Prints a quality report (sizes, oversized or empty chunks, duplicates, suspicious cuts) and writes every chunk to `chunked/` for inspection. Needs no database and no API keys. Add `--qa-json evaluation/baselines/chunk-qa.json` to record it as a baseline before changing chunking settings.
+
+9. **Ingest your data**
    python scripts/ingest.py            (or: --path some/other/dir)
 
-9. **Issue an API key for your frontend/consumer**
-   python scripts/create_api_key.py --label "my-frontend"
-   Save the generated key — you'll need it in the frontend's .env.
+10. **Start over if you need to**
+    python scripts/reset.py --dry-run           (list what is stored, delete nothing)
+    python scripts/reset.py                     (delete every source, after confirmation)
+    python scripts/reset.py --source notes.md   (just one document; repeatable)
+    python scripts/reset.py --keep-chunked      (leave the chunked/ output alone)
+    Ingestion skips a document whose content is unchanged, so re-chunking one means removing its
+    `sources` row first. Deleting a source removes its chunks and vectors with it, in one
+    transaction. The matching `chunked/*.chunks.txt` dry-run output is removed too, unless
+    you pass `--keep-chunked`. API keys and query logs are untouched, and the schema stays
+    put. Re-ingesting re-embeds, so it costs another run of the embedding bill.
 
-10. **Run the server**
+11. **Measure retrieval, and record a baseline**
+    python scripts/evaluate.py --check-dataset          (no database needed)
+    python scripts/evaluate.py --save-baseline evaluation/baselines/retrieval.json
+    Reports recall@k and MRR over the questions in `evaluation/questions.yaml` — replace those with questions about your own documents. After changing chunking or retrieval, re-run with `--baseline evaluation/baselines/retrieval.json`, which exits non-zero if a metric regressed.
+
+12. **Issue an API key for your frontend/consumer**
+    python scripts/create_api_key.py --label "my-frontend"
+    Save the generated key — you'll need it in the frontend's .env.
+
+13. **Run the server**
     uvicorn main:app --reload
 
-11. **Test it**
+14. **Test it**
     curl -X POST http://localhost:8000/api/query \
       -H "X-API-Key: <your-key>" \
       -H "Content-Type: application/json" \

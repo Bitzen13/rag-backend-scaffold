@@ -1,17 +1,20 @@
 """Page analysis: find tables, then put the remaining prose lines and the tables in reading order.
 
-Nothing here assumes a particular document. Tables are those pdfplumber finds from ruling lines
-(borderless tables are not detected: their text is read as prose). Columns are found from
-vertical gaps in the words themselves.
+Nothing here assumes a particular document. Ruled tables are those pdfplumber finds from their
+ruling lines; whitespace-aligned ones come from extraction/pdf/borderless.py. Columns are found
+from vertical gaps in the words themselves, and a page whose text is an image can be read with
+OCR, which produces words of the same shape as any other page.
 """
 
 import statistics
 from collections import Counter
+from collections.abc import Sequence
 from typing import Any
 
 from pdfplumber.page import Page
 from pdfplumber.utils.clustering import cluster_objects
 
+from extraction.pdf.borderless import find_borderless_tables
 from extraction.pdf.model import Line, PageFlow, TableBlock
 
 LINE_TOLERANCE = 3.0  # points: words whose tops differ by less share a line
@@ -169,19 +172,58 @@ def _place_tables(lines: list[Line], tables: list[TableBlock]) -> list[Line | Ta
     return items
 
 
-def analyze_page(page: Page, number: int) -> PageFlow:
-    tables = sorted(_find_ruled_tables(page), key=lambda t: (t.top, t.x0))
-    prose = page
-    for table in tables:
-        prose = prose.outside_bbox((table.x0, table.top, table.x1, table.bottom))
-    words = prose.extract_words(
-        x_tolerance=3, y_tolerance=LINE_TOLERANCE, extra_attrs=["size", "fontname"]
-    )
+def _baselines(words: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    lines = cluster_objects(words, lambda w: w["top"], LINE_TOLERANCE)
+    lines.sort(key=lambda ws: min(w["top"] for w in ws))
+    return lines
+
+
+def _outside(words: list[dict[str, Any]], tables: Sequence[TableBlock]) -> list[dict[str, Any]]:
+    """The words that are not inside any of the given tables."""
+    return [
+        word
+        for word in words
+        if not any(
+            word["x0"] >= table.x0 - 1
+            and word["x1"] <= table.x1 + 1
+            and word["top"] >= table.top - 1
+            and word["bottom"] <= table.bottom + 1
+            for table in tables
+        )
+    ]
+
+
+def analyze_page(
+    page: Page,
+    number: int,
+    *,
+    borderless_tables: bool = True,
+    words: list[dict[str, Any]] | None = None,
+) -> PageFlow:
+    """Analyse one page. `words` overrides the page's own text, which is how an OCR'd page is
+    analysed by exactly the same rules as a normal one."""
+    ruled = sorted(_find_ruled_tables(page), key=lambda t: (t.top, t.x0))
+    if words is None:
+        prose = page
+        for table in ruled:
+            prose = prose.outside_bbox((table.x0, table.top, table.x1, table.bottom))
+        words = prose.extract_words(
+            x_tolerance=3, y_tolerance=LINE_TOLERANCE, extra_attrs=["size", "fontname"]
+        )
+    else:
+        words = _outside(words, ruled)
+
+    tables = list(ruled)
+    if borderless_tables and words:
+        found = find_borderless_tables(_baselines(words))
+        if found:
+            tables.extend(found)
+            words = _outside(words, found)
     lines = _reading_order(words, _find_gutters(words, float(page.width))) if words else []
     return PageFlow(
         number=number,
         width=float(page.width),
         height=float(page.height),
-        items=_place_tables(lines, tables),
+        items=_place_tables(lines, sorted(tables, key=lambda t: (t.top, t.x0))),
         has_images=bool(page.images),
     )

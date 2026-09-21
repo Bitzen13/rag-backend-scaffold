@@ -5,8 +5,8 @@ import statistics
 from collections import Counter
 from dataclasses import dataclass
 
-from extraction.pdf.clean import squash
 from extraction.pdf.model import Line, PageFlow
+from extraction.text import squash
 
 HEADING_SIZE_RATIO = 1.15  # a line this much larger than body text is a heading
 MAX_HEADING_WORDS = 25  # longer lines are prose, however large (e.g. a lead paragraph)

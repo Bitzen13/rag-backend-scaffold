@@ -10,8 +10,14 @@ from extraction.pdf.stats import DocStats
 # --- text cleaning ---------------------------------------------------------------------------
 
 
-def cleaner(**options: tuple[str, ...]) -> TextCleaner:
-    return TextCleaner(PdfOptions(**options))
+def cleaner(
+    *,
+    strip_patterns: tuple[str, ...] = (),
+    truncate_patterns: tuple[str, ...] = (),
+) -> TextCleaner:
+    return TextCleaner(
+        PdfOptions(strip_patterns=strip_patterns, truncate_patterns=truncate_patterns)
+    )
 
 
 def test_cleaner_collapses_whitespace_and_handles_empty() -> None:
@@ -50,7 +56,8 @@ def build(*pages: list[Line | TableBlock], skip: tuple[str, ...] = ()) -> list[D
     builder = StructureBuilder(STATS, TextCleaner(PdfOptions()), frozenset(skip))
     for number, items in enumerate(pages, start=1):
         builder.add_page(PageFlow(number, 595.0, 792.0, list(items)))
-    return builder.finish()
+    _text, elements = builder.finish()
+    return elements
 
 
 def kinds(elements: list[DocumentElement]) -> list[str]:

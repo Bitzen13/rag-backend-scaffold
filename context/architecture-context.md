@@ -10,8 +10,9 @@
 - **Relational database:** PostgreSQL — ingestion metadata, chunks, API keys, query logs; the `pg_trgm` extension powers typo-tolerant keyword retrieval (GIN trigram index on `chunks.text`, migration 0002)
 - **Containerization:** Docker + docker-compose for local dev
 - **Secrets:** Environment variables only
-- **Document parsing libraries:** pdfplumber (implemented; see `extraction/pdf/`), unstructured, beautifulsoup4 (source-dependent, isolated in the extraction module)
-- **Chunking libraries:** custom splitters or langchain/llama-index splitters used as libraries only
+- **Document parsing libraries:** one per format, isolated behind a reader in `extraction/readers/`: pdfplumber (PDF), beautifulsoup4 (HTML), python-docx (DOCX), openpyxl (Excel), plus the standard library for CSV, JSON, YAML, email and source code. Optional: pytesseract, for OCR on scanned PDF pages
+- **Tokenizer:** tiktoken, so chunk sizes are measured in the embedding model's own tokens (falls back to word counts with a warning if unavailable)
+- **Chunking libraries:** none. The splitters are in `chunking/` (`sentences.py`, `prose.py`) because what is needed is token-budgeted, script-agnostic splitting over the element model
 
 ## 2. System Boundaries
 
@@ -47,9 +48,12 @@
 | content_hash | text | SHA-256, drives change detection |
 | last_ingested_at | timestamptz | |
 | status | text | active / stale / deleted (enforced by a CHECK constraint) |
-| metadata | jsonb | source-specific metadata |
+| metadata | jsonb | source-specific metadata, including which reader produced it |
+| chunking | jsonb | the chunking plan this source was last ingested with (migration 0003) |
 
 Constraint: `UNIQUE (source_type, source_uri)` — a source is identified by its type and URI, which is what change detection looks up.
+
+`chunking` holds `{strategy, chunk_size, chunk_overlap, prose_splitting, max_chunk_tokens, tokenizer}`. Phase 6 compares it against `config.yaml` so that changing a document's chunking settings re-chunks it, which a content hash alone cannot detect.
 
 **chunks**
 | Column | Type | Notes |
@@ -58,7 +62,7 @@ Constraint: `UNIQUE (source_type, source_uri)` — a source is identified by its
 | source_id | UUID (FK) | |
 | chunk_index | int | |
 | text | text | retained for citation and re-embedding |
-| token_count | int | |
+| token_count | int | exact count from the tokenizer recorded in `sources.chunking` |
 | embedding_model | text | for auditability |
 | created_at | timestamptz | |
 
@@ -96,14 +100,32 @@ Each record: chunk_id (join key to Postgres), embedding (float array), and a met
 extraction:
   provider: filesystem
   path: data/sample
-  extensions: [.md, .txt]
+  extensions: [.md, .txt, .pdf]        # a reader is chosen per extension; unknown = plain text
+  pdf:
+    strip_patterns: [...]              # regular expressions; corpus cleanup, not structure
+    truncate_patterns: [...]
+    skip_sections: [References]
+    borderless_tables: true            # also detect tables aligned with whitespace
+    ocr:                               # read pages that are an image of text (needs Tesseract)
+      enabled: false
+      language: eng
+      min_characters: 20
+      resolution: 300
 
 chunking:
-  chunk_size: 500
+  chunk_size: 500                      # sizes are in TOKENS of the embedding model below
   chunk_overlap: 50
+  max_chunk_tokens: 7781               # hard cap; unset = derived from the model's input limit
+  tokenizer: auto                      # auto (the embedding model's own) | words
+  prose_splitting: sentence            # paragraph | sentence
   documents:            # strategy chosen manually for EACH document; unlisted = not ingested
-    rag-overview.md: fixed_size          # fixed_size | document_aware
+    rag-overview.md: document_aware      # fixed_size | document_aware
     List_of_largest_stars.pdf: document_aware
+    long-essay.pdf:                      # or a mapping, to override the settings above
+      strategy: document_aware
+      chunk_size: 800
+      chunk_overlap: 60
+      prose_splitting: sentence
 
 retrieval:
   top_k: 5
@@ -129,6 +151,8 @@ auth:
 
 Secrets (ANTHROPIC_API_KEY, OPENAI_API_KEY, DATABASE_URL, VECTOR_DB_URL) come exclusively from environment variables.
 
+Validation at load time, so a bad value fails loudly rather than producing bad chunks: every effective `chunk_overlap` is below its `chunk_size`, every `chunk_size` is within the hard cap, the hard cap is within the embedding model's input limit, `prose_splitting` is only set on `document_aware`, and an embedding model whose input limit is not known requires `max_chunk_tokens` to be set explicitly.
+
 ## 5. API Design
 
 **POST /api/query**
@@ -145,7 +169,21 @@ This request/response shape is the contract the frontend template (and any other
 
 **Ingestion:** Source → Extractor → Chunker → Embedder → Vector DB (+ sources/chunks rows in Postgres, content_hash updated)
 
-Implemented in `ingestion/pipeline.py`, one transaction per document. Chunk size/overlap are counted in whitespace-delimited words (a tokenizer-free approximation of tokens); the strategy is chosen per document in `chunking.documents` (key = `source_uri`) with no default — a document without an entry fails ingestion with a message naming it. `fixed_size` is a sliding word window. `document_aware` needs structured extraction (currently PDFs, via `extraction/pdf/`): one chunk per table row (prefixed with its table caption/section, rendered `Header: value | ...`) and prose paragraphs packed under their heading path. The PDF reader works structure out per document from that document's own statistics, not fixed values: headings are lines larger than the document's body font (or short bold lines) with levels ranked by size; a table's first row is its header unless it is mostly numeric; a table starting a page right after one that reached the bottom continues it (repeated header rows are dropped); the short line above a table is its caption; running headers/footers are removed; text beside a figure (captions) is kept as separate paragraphs; multi-column pages are read column by column; paragraphs are joined across page breaks. Corpus-specific cleanup (citation markers, unrendered template text, sections to skip such as References) is configured under `extraction.pdf` in `config.yaml` as regular expressions. Not supported yet: borderless tables (read as prose), scanned PDFs (a warning is logged), OCR. Chunk metadata (`chunk_type`, `table`, `section`, `page`, `row_name`) is stored on the vector record. Changing a document's strategy does not re-chunk an already-ingested, unchanged source. An unchanged source (same `content_hash`) is skipped; a changed one has its chunks and vectors replaced in the same transaction.
+Implemented in `ingestion/pipeline.py`, one transaction per document.
+
+**Extraction is a reader per format, all producing one element model.** `extraction/base.py` defines the elements — heading, paragraph, list item, table row, code, question, answer, speaker turn, message — each carrying the context a chunk built from it will need (heading path, table caption, list lead-in, speaker, language, page/sheet/slide, line range). `extraction/readers/registry.py` maps an extension to its reader: PDF, Markdown, HTML, DOCX, CSV/TSV, Excel, JSON/JSONL/YAML, email (eml/mbox), source code, and plain text as the fallback for any other extension, so an unknown format is still ingested rather than skipped. A reader that cannot read a file logs it and the run continues. `extraction/elements.py` assembles every reader's output, joining element texts into the document text and giving each element its offsets in it. See `adding-a-reader.md`.
+
+**Chunking is one algorithm over that element model**, so a new format never changes it. `document_aware` (`chunking/document_aware.py`) applies a rule per element kind: a table row is one chunk with its caption and column names; a code block stays whole; list items group under their lead-in; a question becomes the context its answers repeat; transcript turns group into a time window; a message is one chunk; paragraphs pack together under their heading path. A chunk's context line is counted against its token budget, not added on top of it, and a heading path too deep to fit is trimmed from the outside in. `fixed_size` remains for text with no structure worth preserving, and `document_aware` falls back to it for a document with no elements. Only one element can ever be oversized within a group, which is what keeps each split part's offsets exact. See `chunking-guide.md`.
+
+**Sizes are in tokens of the embedding model** (`chunking/tokenizer.py`, tiktoken; word counts as a fallback with a warning). `chunking/sentences.py` finds sentence boundaries without assuming English — Latin, CJK, Devanagari, Arabic, Urdu and Ethiopic terminators, abbreviations and initials excluded, falling back to one span for text with no sentence punctuation. `chunking/prose.py` packs words or whole sentences into a token budget, overlapping by whole sentences in `sentence` mode and splitting by character as a last resort for text with no word breaks. Every chunk passes through `chunking/assembly.py`, which counts it exactly and enforces `max_chunk_tokens`, so no chunk is ever handed to the embedding model to be truncated.
+
+**The PDF reader** (`extraction/pdf/`) works structure out per document from that document's own statistics, not fixed values: headings are lines larger than the document's body font (or short bold lines) with levels ranked by size; a table's first row is its header unless it is mostly numeric; a table starting a page right after one that reached the bottom continues it (repeated header rows are dropped); the short line above a table is its caption; running headers/footers are removed; text beside a figure is kept as separate paragraphs; multi-column pages are read column by column; paragraphs are joined across page breaks. Tables aligned with whitespace rather than ruling lines are found by `extraction/pdf/borderless.py`, which is deliberately hard to trigger — the rows must agree on column count and position, hold short values, contain no sentence running through a cell, and not read on into one another — because a false positive turns prose into nonsense rows. A page holding an image of text instead of text can be read with OCR (`extraction/pdf/ocr.py`, opt-in, needs Tesseract), which produces words of the same shape as any other page and so goes through the same layout analysis. Corpus-specific cleanup (citation markers, unrendered template text, sections to skip) is configured under `extraction.pdf` as regular expressions. Not supported: OCR of handwriting, `.doc`/`.xls`, slide decks.
+
+**Each source records the plan it was chunked with** in `sources.chunking`, so Phase 6 can detect a configuration change. Phase 5 only records it: an unchanged source (same `content_hash`) is still skipped even if its chunking settings changed. A changed source has its chunks and vectors replaced in the same transaction.
+
+The skip currently happens *after* extraction, not before it: every document is extracted and chunked on every run, and only embedding and storage are skipped. `content_hash` is a hash of the extracted text, so it cannot be computed without parsing the file — which is why avoiding the parse is a Phase 6 change (a hash of the raw bytes, and a lazy extractor) rather than a tuning detail. On the sample corpus a fully-unchanged re-run spends about 49 seconds re-parsing to skip everything.
+
+**Measurement.** `scripts/ingest.py --dry-run` reports chunk quality per document and for the corpus (size distribution, oversized, empty, undersized, duplicates, chunks that start mid-sentence or end mid-word, chunks that are mostly a URL), writes every chunk to `chunked/` for inspection, and can record the report as JSON; it needs no database and no API keys. `scripts/evaluate.py` measures retrieval itself — recall@k and MRR over `evaluation/questions.yaml`, through the same `Retriever` the API uses — and can record a baseline and fail on a regression against it. `--check-dataset` tells a typo in the evaluation set apart from a retrieval failure by re-chunking the corpus and reporting the cases no chunk can satisfy.
 
 **Query:** (Phase 4 implements everything after the API layer: `services/query_service.py` → `retrieval/retriever.py` + `generation/`.) Client → /api/query (key validated) → question embedded → vector similarity search (+ filters) **and** typo-tolerant keyword search → results merged (reciprocal rank fusion) → top-K chunks fetched from Postgres → prompt assembled → LLM call → answer + citations returned
 

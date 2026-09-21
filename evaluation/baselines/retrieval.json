@@ -1,0 +1,14 @@
+{
+  "recorded_at": "2026-09-21T20:23:16+00:00",
+  "dataset": "evaluation/questions.yaml",
+  "label": "",
+  "metrics": {
+    "cases": 25,
+    "recall_at": {
+      "1": 0.68,
+      "3": 0.96,
+      "5": 1.0
+    },
+    "mrr": 0.828
+  }
+}

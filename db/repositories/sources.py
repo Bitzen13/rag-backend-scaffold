@@ -19,6 +19,7 @@ class SourceRepository:
         source_uri: str,
         content_hash: str,
         metadata: JsonObject | None = None,
+        chunking: JsonObject | None = None,
     ) -> Source:
         source = Source(
             source_type=source_type,
@@ -27,6 +28,7 @@ class SourceRepository:
             last_ingested_at=datetime.now(UTC),
             status=SourceStatus.ACTIVE.value,
             metadata_=metadata or {},
+            chunking=chunking or {},
         )
         self._session.add(source)
         await self._session.flush()
@@ -49,7 +51,12 @@ class SourceRepository:
         return result.scalars().all()
 
     async def mark_ingested(
-        self, source: Source, *, content_hash: str, metadata: JsonObject | None = None
+        self,
+        source: Source,
+        *,
+        content_hash: str,
+        metadata: JsonObject | None = None,
+        chunking: JsonObject | None = None,
     ) -> Source:
         """Record a completed (re-)ingestion: new hash, fresh timestamp, status back to active."""
         source.content_hash = content_hash
@@ -57,6 +64,8 @@ class SourceRepository:
         source.status = SourceStatus.ACTIVE.value
         if metadata is not None:
             source.metadata_ = metadata
+        if chunking is not None:
+            source.chunking = chunking
         await self._session.flush()
         return source
 

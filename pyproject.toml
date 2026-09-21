@@ -6,9 +6,16 @@ line-length = 100
 select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "C4", "RUF"]
 
 [tool.ruff.lint.per-file-ignores]
-# Handles real-world typographic characters (minus sign, en dash) on purpose.
+# These modules deal in real-world typography on purpose: minus signs, en dashes, curly quotes
+# and the sentence terminators of non-Latin scripts.
 "extraction/pdf/*.py" = ["RUF001"]
+"extraction/tables.py" = ["RUF001"]
+"extraction/readers/*.py" = ["RUF001"]
+"chunking/sentences.py" = ["RUF001"]
+"chunking/qa.py" = ["RUF001"]
 "tests/test_pdf_extraction.py" = ["RUF001"]
+"tests/test_sentences.py" = ["RUF001"]
+"tests/test_readers.py" = ["RUF001"]
 
 [tool.mypy]
 python_version = "3.11"
@@ -21,5 +28,6 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 
 [[tool.mypy.overrides]]
-module = ["pdfplumber", "pdfplumber.*"]
+# pdfplumber has no stubs; pytesseract is an optional dependency that may not be installed.
+module = ["pdfplumber", "pdfplumber.*", "pytesseract"]
 ignore_missing_imports = true

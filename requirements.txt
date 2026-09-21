@@ -9,4 +9,13 @@ alembic>=1.13,<2
 pgvector>=0.3,<1
 openai>=1.40,<3
 anthropic>=0.40,<1
+tiktoken>=0.7,<1
+# Document readers (one per format; see extraction/readers/). A reader whose package is missing
+# fails only for files of that format, with a message naming what to install.
 pdfplumber>=0.11,<1
+beautifulsoup4>=4.12,<5
+python-docx>=1.1,<2
+openpyxl>=3.1,<4
+# Optional: OCR for scanned PDF pages (extraction.pdf.ocr.enabled). Also needs the tesseract
+# binary on PATH.
+# pytesseract>=0.3.10,<1

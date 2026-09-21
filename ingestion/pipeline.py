@@ -16,7 +16,7 @@ from enum import StrEnum
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from chunking.base import ChunkerResolver, TextChunk
+from chunking.base import ChunkerResolver, ChunkPlan, TextChunk
 from db.models import SourceStatus
 from db.repositories.chunks import ChunkRepository, NewChunk
 from db.repositories.sources import SourceRepository
@@ -40,6 +40,17 @@ class Outcome(StrEnum):
 
 
 @dataclass(frozen=True)
+class PreparedDocument:
+    """A document's chunks and the plan they were made with, ready to store."""
+
+    plan: ChunkPlan
+    chunks: list[TextChunk]
+
+    def __len__(self) -> int:
+        return len(self.chunks)
+
+
+@dataclass(frozen=True)
 class DocumentResult:
     source_uri: str
     outcome: Outcome
@@ -54,17 +65,17 @@ class IngestionReport:
         return [r for r in self.results if r.outcome == outcome]
 
 
-def log_chunks(uri: str, chunker_name: str, chunks: Sequence[TextChunk]) -> None:
+def log_chunks(uri: str, plan: ChunkPlan, chunks: Sequence[TextChunk]) -> None:
     """INFO: per-document chunking summary. DEBUG: every chunk with its metadata and a preview."""
     if not chunks:
-        logger.info("chunked %s with %s: no chunks (no text content)", uri, chunker_name)
+        logger.info("chunked %s [%s]: no chunks (no text content)", uri, plan.describe())
         return
     sizes = [c.token_count for c in chunks]
     types = Counter(str(c.metadata.get("chunk_type", "text")) for c in chunks)
     logger.info(
-        "chunked %s with %s: %d chunks, words min/avg/max = %d/%d/%d, types: %s",
+        "chunked %s [%s]: %d chunks, tokens min/avg/max = %d/%d/%d, types: %s",
         uri,
-        chunker_name,
+        plan.describe(),
         len(chunks),
         min(sizes),
         sum(sizes) // len(sizes),
@@ -75,7 +86,7 @@ def log_chunks(uri: str, chunker_name: str, chunks: Sequence[TextChunk]) -> None
         for chunk in chunks:
             preview = " ".join(chunk.text.split())[:100]
             logger.debug(
-                "  %s chunk %d: %d words, chars %d-%d, meta=%s | %s",
+                "  %s chunk %d: %d tokens, chars %d-%d, meta=%s | %s",
                 uri,
                 chunk.index,
                 chunk.token_count,
@@ -154,7 +165,7 @@ class IngestionPipeline:
         )
 
         # Chunk everything first so progress can report against the total chunk count.
-        prepared: list[tuple[ExtractedDocument, list[TextChunk] | DocumentResult]] = []
+        prepared: list[tuple[ExtractedDocument, PreparedDocument | DocumentResult]] = []
         for document in documents:
             try:
                 prepared.append((document, self._chunk(document)))
@@ -164,17 +175,17 @@ class IngestionPipeline:
                     (document, DocumentResult(document.source_uri, Outcome.FAILED, str(exc)))
                 )
         progress = ProgressTracker(
-            sum(len(p) for _, p in prepared if not isinstance(p, DocumentResult))
+            sum(len(p.chunks) for _, p in prepared if isinstance(p, PreparedDocument))
         )
         logger.info("chunked %d documents into %d chunks", len(documents), progress.total)
 
         report = IngestionReport()
         run_started = time.monotonic()
-        for document, chunks in prepared:
-            if isinstance(chunks, DocumentResult):
-                report.results.append(chunks)
+        for document, outcome in prepared:
+            if isinstance(outcome, DocumentResult):
+                report.results.append(outcome)
             else:
-                report.results.append(await self._ingest_safely(document, chunks, progress))
+                report.results.append(await self._ingest_safely(document, outcome, progress))
         logger.info(
             "ingestion finished in %s: %s",
             format_duration(time.monotonic() - run_started),
@@ -182,17 +193,18 @@ class IngestionPipeline:
         )
         return report
 
-    def _chunk(self, document: ExtractedDocument) -> list[TextChunk]:
-        chunker = self._chunkers.for_document(document.source_uri)
-        chunks = chunker.chunk(document)
-        log_chunks(document.source_uri, type(chunker).__name__, chunks)
-        return chunks
+    def _chunk(self, document: ExtractedDocument) -> PreparedDocument:
+        uri = document.source_uri
+        plan = self._chunkers.plan_for(uri)
+        chunks = self._chunkers.for_document(uri).chunk(document)
+        log_chunks(uri, plan, chunks)
+        return PreparedDocument(plan, chunks)
 
     async def _ingest_safely(
-        self, document: ExtractedDocument, chunks: list[TextChunk], progress: ProgressTracker
+        self, document: ExtractedDocument, prepared: PreparedDocument, progress: ProgressTracker
     ) -> DocumentResult:
         try:
-            return await self.ingest_document(document, chunks, progress)
+            return await self.ingest_document(document, prepared, progress)
         except (EmbeddingError, ValueError) as exc:
             logger.warning("failed to ingest %s: %s", document.source_uri, exc)
             return DocumentResult(document.source_uri, Outcome.FAILED, str(exc))
@@ -201,9 +213,10 @@ class IngestionPipeline:
             return DocumentResult(document.source_uri, Outcome.FAILED, "unexpected error")
 
     async def ingest_document(
-        self, document: ExtractedDocument, chunks: list[TextChunk], progress: ProgressTracker
+        self, document: ExtractedDocument, prepared: PreparedDocument, progress: ProgressTracker
     ) -> DocumentResult:
         uri = document.source_uri
+        chunks = prepared.chunks
         content_hash = hash_content(document.text)
         if not chunks:
             return DocumentResult(uri, Outcome.SKIPPED, "no text content")
@@ -248,6 +261,7 @@ class IngestionPipeline:
                     source_uri=uri,
                     content_hash=content_hash,
                     metadata=document.metadata,
+                    chunking=prepared.plan.as_metadata(),
                 )
             else:
                 # Changed content: drop the stale chunks and vectors in the same transaction.
@@ -255,7 +269,10 @@ class IngestionPipeline:
                 await vector_store.delete_by_source(source.id)
                 await chunk_repo.delete_by_source(source.id)
                 await sources.mark_ingested(
-                    source, content_hash=content_hash, metadata=document.metadata
+                    source,
+                    content_hash=content_hash,
+                    metadata=document.metadata,
+                    chunking=prepared.plan.as_metadata(),
                 )
 
             chunk_ids = [uuid.uuid4() for _ in chunks]

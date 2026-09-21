@@ -21,13 +21,16 @@ Beyond the core question-answering loop, the system includes the infrastructure 
 ## Feature list
 
 **Ingestion & Extraction**
-- Pluggable extraction layer converting raw source content into clean text
+- Pluggable extraction layer converting raw source content into clean text, with a reader per format (PDF, Markdown, HTML, DOCX, CSV, Excel, JSON, YAML, email, source code) and plain text as the fallback, so an unfamiliar format is still ingested
 - Metadata tracking per ingested item (source identifier, ingestion timestamp, content hash/version)
 - Change detection comparing current source state against tracked metadata
 - Re-sync capability that reprocesses only changed or new content
 
 **Chunking**
-- Chunking strategy chosen manually per document via config (fixed-size with overlap, or document-aware: one chunk per table row plus prose by section)
+- Chunking strategy chosen manually per document via config (fixed-size with overlap, or document-aware), with per-document size and splitting overrides
+- One document-aware algorithm over an abstract element model, so a new format is a new reader and not a new strategy: a table row per chunk, code blocks whole, list items under their lead-in, a question with its answer, transcript turns by time window, a message per chunk, prose packed by section
+- Sizes measured in the embedding model's own tokens, with a hard cap so no chunk is ever silently truncated
+- Sentence-aware splitting of long prose, without assuming English
 - Chunk-level metadata preservation for traceability back to source
 
 **Embedding & Vector Storage**
@@ -52,8 +55,12 @@ Beyond the core question-answering loop, the system includes the infrastructure 
 - OpenAPI-documented, so any consumer can generate a client or integrate without reading source code
 
 **Configuration**
-- Single configuration file controlling chunking, retrieval, and model parameters
+- Single configuration file controlling chunking, retrieval, and model parameters, validated on load so a setting that cannot take effect is an error rather than a silent no-op
 - Environment-variable-based credential handling
+
+**Measurement**
+- Chunk quality report before anything is stored: size distribution, oversized or empty chunks, duplicates, cuts in the wrong place
+- Retrieval evaluation harness reporting recall@k and MRR over a question set, with recorded baselines so a change to chunking or retrieval is kept only if it measurably helps
 
 ## Core user flows (examples)
 
@@ -70,7 +77,10 @@ On the next ingestion run, change detection identifies the modified document via
 A new client (e.g., a newly built frontend, or a Slack bot) is issued its own API key via the key-management process, scoped and revocable independently of any other consumer's key.
 
 **5. Tuning retrieval behavior**
-A developer adjusts chunk size or retrieval count in the config file and re-runs ingestion/testing directly against the API, with no frontend involved at all.
+A developer records a baseline (`scripts/ingest.py --dry-run --qa-json ...` and `scripts/evaluate.py --save-baseline ...`), adjusts chunk size, splitting mode or retrieval count in the config file, re-runs both, and keeps the change only if recall@k or MRR improved — no frontend involved at all.
+
+**7. Ingesting a format nobody planned for**
+A directory turns out to contain .eml exports and a spreadsheet alongside the PDFs. Each goes to its own reader, and a format with no reader is read as plain text with light structure detection, so the run completes rather than skipping files.
 
 **6. Handling a question with no relevant context**
 Retrieval returns nothing above the similarity threshold; the LLM is still called with an empty context. A greeting or small talk gets a natural reply; a factual question gets a statement that the information is not in the knowledge base, rather than a fabricated answer.

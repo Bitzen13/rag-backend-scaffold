@@ -1,0 +1,121 @@
+# Retrieval evaluation set: a question, and a passage that answers it.
+#
+# A case passes when one of its `expect` passages appears in a retrieved chunk (whitespace and
+# case are ignored). Passages are named by their text rather than by chunk id, so the set stays
+# valid when chunking changes - which is exactly when it is needed.
+#
+# Run it with: python scripts/evaluate.py
+# Record it as the baseline with: python scripts/evaluate.py --save-baseline \
+#     evaluation/baselines/retrieval.json
+#
+# The cases below are written against the sample corpus in data/sample. Replace them with
+# questions about your own documents; aim for at least 30 to make the numbers mean anything, and
+# cover the kinds of question that matter: an exact name, a number in a table, a definition, and
+# something only stated in passing.
+
+cases:
+  # Exact identifiers in a table: what the typo-tolerant keyword search exists for.
+  - question: What is the radius of VY Canis Majoris?
+    expect: ["Star name: VY Canis Majoris"]
+    source_uri: List_of_largest_stars.pdf
+    note: a table row, found by name rather than by meaning
+
+  - question: How large is WOH G64?
+    expect: ["WOH G64"]
+    source_uri: List_of_largest_stars.pdf
+
+  - question: What is the theoretical limit of star size in the Milky Way?
+    expect: ["Theoretical limit of star size"]
+    source_uri: List_of_largest_stars.pdf
+
+  - question: Which stars are listed for the Andromeda and Triangulum galaxies?
+    expect: ["Andromeda and Triangulum"]
+    source_uri: List_of_largest_stars.pdf
+
+  # Misspelled on purpose: the answer should still be found.
+  - question: how big is VY Canis Majorus
+    expect: ["Star name: VY Canis Majoris"]
+    source_uri: List_of_largest_stars.pdf
+    note: misspelling; vector search alone tends to miss this
+
+  # Definitions and explanations: what vector search is good at.
+  - question: How are the angular diameters of stars measured?
+    expect: ["angular diameters of stars can be measured directly using stellar interferometry"]
+    source_uri: List_of_largest_stars.pdf
+
+  - question: Why are the radii of the largest stars uncertain?
+    expect: ["issues exist in determining accurate radii of the largest stars"]
+    source_uri: List_of_largest_stars.pdf
+
+  - question: Where does the word rocket come from?
+    expect: ["comes from the Italian rocchetta"]
+    source_uri: Rocket.pdf
+
+  - question: Who first proposed using rockets for human spaceflight?
+    expect: ["William Leitch first proposed the concept of using rockets"]
+    source_uri: Rocket.pdf
+
+  - question: What was the first successful human spaceflight?
+    expect: ["The first successful human spaceflight was Vostok 1"]
+    source_uri: Space_exploration.pdf
+
+  - question: Who was the first person in space and when?
+    expect: ["Yuri Gagarin, on 12 April 1961"]
+    source_uri: Space_exploration.pdf
+
+  - question: What was MW 18014?
+    expect: ["MW 18014 was a German V-2 rocket test launch"]
+    source_uri: Space_exploration.pdf
+
+  - question: What goal did Kennedy set for the Space Race?
+    expect: ["setting the goal of landing a man on the Moon"]
+    source_uri: Human_spaceflight.pdf
+
+  - question: Which rocket sent Apollo to the Moon?
+    expect: ["developing the Saturn V rocket"]
+    source_uri: Human_spaceflight.pdf
+
+  - question: Who led the Space Task Group after Apollo?
+    expect: ["Spiro Agnew, to head a Space Task Group"]
+    source_uri: Human_spaceflight.pdf
+
+  - question: Are astronomy and astrophysics the same thing?
+    expect: ["broadly synonymous in modern usage"]
+    source_uri: Astronomy.pdf
+
+  - question: What is the Nebra sky disc?
+    expect: ["Nebra sky disc"]
+    source_uri: Astronomy.pdf
+
+  - question: How old is the universe according to the Big Bang theory?
+    expect: ["extremely hot and dense state about 13."]
+    source_uri: Outer_space.pdf
+
+  - question: What is the average energy density of the universe?
+    expect: ["5.9 protons per cubic meter"]
+    source_uri: Outer_space.pdf
+
+  - question: Where does the term "space" come from?
+    expect: ["the region beyond Earth's sky"]
+    source_uri: Outer_space.pdf
+
+  - question: What was the first probe to study another planet?
+    expect: ["Mariner 2 was the first probe to study another planet"]
+    source_uri: Uncrewed_spacecraft.pdf
+
+  - question: What does a spacecraft bus provide?
+    expect: ["The bus provides physical structure, thermal control"]
+    source_uri: Uncrewed_spacecraft.pdf
+
+  - question: What does the structure of a spacecraft do?
+    expect: ["provides overall mechanical integrity of the spacecraft"]
+    source_uri: Uncrewed_spacecraft.pdf
+
+  # The project's own documents, to check that small sources are not drowned out.
+  - question: What does the retrieval stage of a RAG pipeline do?
+    expect: ["retrieval", "Retrieval"]
+    source_uri: rag-overview.md
+
+  - question: What are the stages of the ingestion pipeline?
+    expect: ["chunk", "Chunk"]
+    source_uri: pipeline-stages.txt

@@ -6,8 +6,9 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from chunking.base import Chunker, ChunkingStrategyError
+from chunking.base import Chunker, ChunkingStrategyError, ChunkPlan
 from chunking.fixed_size import FixedSizeChunker
+from chunking.tokenizer import WordTokenizer
 from db.models import EMBEDDING_DIMENSIONS, Chunk, ChunkVector, Source
 from embedding.base import EmbeddingError
 from extraction.base import ExtractedDocument
@@ -23,16 +24,30 @@ class FakeExtractor:
         return list(self.documents)
 
 
+PLAN = ChunkPlan(
+    strategy="fixed_size",
+    chunk_size=5,
+    chunk_overlap=1,
+    prose_splitting="paragraph",
+    max_chunk_tokens=1000,
+    tokenizer="words",
+)
+
+
 class FakeChunkers:
     """Resolver that only knows the documents it is given (no default strategy)."""
 
     def __init__(self, known: set[str]) -> None:
         self._known = known
-        self._chunker = FixedSizeChunker(chunk_size=5, chunk_overlap=1)
+        self._chunker = FixedSizeChunker(PLAN, WordTokenizer())
 
-    def for_document(self, source_uri: str) -> Chunker:
+    def plan_for(self, source_uri: str) -> ChunkPlan:
         if source_uri not in self._known:
             raise ChunkingStrategyError(f"no chunking strategy set for {source_uri!r}")
+        return PLAN
+
+    def for_document(self, source_uri: str) -> Chunker:
+        self.plan_for(source_uri)
         return self._chunker
 
 

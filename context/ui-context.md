@@ -11,7 +11,7 @@ Do not add frontend frameworks, templates, static assets, or styling to this rep
 The only human-facing surfaces are for developers and operators:
 
 - **API docs:** FastAPI's auto-generated OpenAPI docs (Swagger UI at `/docs`, ReDoc at `/redoc`). These are the interactive way to explore and test the API, so keep the schema accurate (`response_model`, error responses, summaries). Consider disabling or protecting them in production.
-- **CLI/scripts:** `scripts/ingest.py` and `scripts/create_api_key.py` communicate through terminal output. Keep output concise and actionable: print what was ingested, skipped, or failed, and print a newly issued API key exactly once, with a reminder that it cannot be retrieved later.
+- **CLI/scripts:** `scripts/ingest.py`, `scripts/reset.py` and `scripts/create_api_key.py` communicate through terminal output. Keep output concise and actionable: print what was ingested, skipped, or failed, and print a newly issued API key exactly once, with a reminder that it cannot be retrieved later. A destructive script shows what it will remove and asks for confirmation before doing it (`--dry-run` to see it, `--yes` to skip the prompt).
 - **Logs:** structured, leveled logs via `logging`. Never log secrets, plaintext API keys, or full prompts containing user data at default log levels.
 
 ## Consumer Contract

@@ -60,6 +60,11 @@ class Source(Base):
     metadata_: Mapped[JsonObject] = mapped_column(
         "metadata", JSONB, default=dict, server_default=text("'{}'::jsonb")
     )
+    # The chunking plan this source was last ingested with (strategy, sizes, splitting mode,
+    # tokenizer). Phase 6 compares it against config to decide whether to re-chunk.
+    chunking: Mapped[JsonObject] = mapped_column(
+        JSONB, default=dict, server_default=text("'{}'::jsonb")
+    )
 
 
 class Chunk(Base):

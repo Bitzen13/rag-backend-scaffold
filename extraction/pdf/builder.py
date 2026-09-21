@@ -10,9 +10,10 @@ the wording of particular headings or column names:
 """
 
 import re
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 
 from extraction.base import DocumentElement, ElementKind
+from extraction.elements import place_elements
 from extraction.pdf.clean import TextCleaner
 from extraction.pdf.model import Line, PageFlow, TableBlock
 from extraction.pdf.stats import (
@@ -128,17 +129,12 @@ class StructureBuilder:
         self._flush_heading()
         self._flush_streams(keep_unfinished=True)
 
-    def finish(self) -> list[DocumentElement]:
-        """Flush pending text and give each element its offsets in the joined document text."""
+    def finish(self) -> tuple[str, list[DocumentElement]]:
+        """Flush pending text and return the document text with each element's offsets in it."""
         self._flush_heading()
         self._flush_streams()
-        placed: list[DocumentElement] = []
-        position = 0
-        for element in self.elements:
-            end = position + len(element.text)
-            placed.append(replace(element, char_start=position, char_end=end))
-            position = end + 1  # elements are joined with a newline
-        return placed
+        text, placed = place_elements(self.elements)
+        return text, list(placed)
 
     # ---- prose ----------------------------------------------------------------------------
 

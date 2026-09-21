@@ -1,18 +1,22 @@
 """Text cleanup, driven by patterns from config rather than assumptions about any one document."""
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from extraction.text import strip_invalid_characters
+from extraction.text import squash, strip_invalid_characters
 
-_SPACES = re.compile(r"\s+")
 _DANGLING_OPEN_PAREN = re.compile(r"\s*\(\s*$")
 _STRAY_PUNCTUATION = frozenset({"<", ">", "~", "-", "–", "—", "|"})
 
 
-def squash(text: str) -> str:
-    """Collapse all whitespace runs (including newlines) to single spaces."""
-    return _SPACES.sub(" ", text).strip()
+@dataclass(frozen=True)
+class OcrSettings:
+    """Optional OCR for scanned pages (see extraction/pdf/ocr.py). Off by default."""
+
+    enabled: bool = False
+    language: str = "eng"
+    min_characters: int = 20  # a page with fewer characters than this looks scanned
+    resolution: int = 300
 
 
 @dataclass(frozen=True)
@@ -24,11 +28,15 @@ class PdfOptions:
         marker and whatever follows it).
     skip_sections: headings (case-insensitive) whose section is left out entirely, up to the next
         heading of the same or a higher level (e.g. "References").
+    borderless_tables: also detect tables laid out with whitespace rather than ruling lines.
+    ocr: read pages that hold an image of text instead of text.
     """
 
     strip_patterns: tuple[str, ...] = ()
     truncate_patterns: tuple[str, ...] = ()
     skip_sections: tuple[str, ...] = ()
+    borderless_tables: bool = True
+    ocr: OcrSettings = field(default_factory=OcrSettings)
 
 
 class TextCleaner:

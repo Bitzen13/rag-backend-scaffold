@@ -27,9 +27,21 @@
 - Keep OpenAPI output accurate: set `response_model`, declare error responses, and add summaries so consumers can generate clients without reading source.
 - Long-running work belongs outside request handlers. Ingestion, re-sync, and bulk re-embedding run through the CLI/scripts or the internal admin path, never inline in `/api/query`.
 
+## Extraction & Chunking
+
+- Readers describe a file as `DocumentElement`s and make no chunking decisions. Chunking rules are written against element kinds, never against a file format — if a rule seems to need the format, the element model is missing a field or a kind. See `adding-a-reader.md`.
+- A reader never assumes an encoding (`decode_bytes`), always normalises newlines before line-based parsing, and always strips characters Postgres cannot store. A file it cannot read raises `ReaderError`, is logged, and the run continues — one bad file must not stop ingestion.
+- An optional reader dependency is imported through `require()`, so a missing package names itself instead of failing at start-up. An unknown extension falls back to plain text rather than being skipped.
+- Element offsets are assigned in one place (`extraction/elements.ElementList.build`). Never assign `char_start`/`char_end` by hand: they are what makes a retrieved chunk traceable to its source.
+- Chunk sizes are token counts from the configured embedding model's own tokenizer, never word counts. Every chunk passes through `ChunkAssembler`, which counts it exactly and enforces the hard cap, so no chunk can be silently truncated by the provider.
+- A chunk's context (heading path, table caption, list lead-in, question) is counted against its budget, not added on top of it.
+- Structure detection must be conservative where a false positive corrupts content. Borderless-table detection is the worked example: it requires several independent signals, because reading prose as table rows is worse than missing a table.
+- Changing chunking or retrieval behaviour is a measurement, not an opinion: record a baseline with `scripts/ingest.py --dry-run --qa-json ...` and `scripts/evaluate.py --save-baseline ...` first, and keep the change only if recall@k or MRR improved, or it fixed a defect without regressing them.
+
 ## Configuration & Secrets
 
 - All tunable parameters (chunk size/overlap, `top_k`, similarity threshold, model and provider choices) live in `config.yaml` and are loaded once into a typed settings object (e.g. Pydantic settings). No magic numbers in pipeline code.
+- A setting that cannot take effect is a validation error, not a silent no-op: `prose_splitting` on `fixed_size`, a `chunk_overlap` at or above its `chunk_size`, a `chunk_size` above the hard cap, a hard cap above the embedding model's input limit.
 - Secrets (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `DATABASE_URL`, `VECTOR_DB_URL`) come from environment variables only. Never hardcode, log, or commit them; keep `.env` out of version control and maintain `.env.example`.
 
 ## Database & Migrations
@@ -63,6 +75,7 @@
 - Each pipeline stage is testable in isolation using fake or stub providers — tests must not call real LLM or embedding APIs.
 - Test the API with FastAPI's `TestClient`/`httpx.AsyncClient` and dependency overrides for auth, database, and providers.
 - Cover the key behaviors: auth failure, revoked key, malformed request, empty retrieval fallback, and change detection on re-sync.
+- Chunking rules are tested against hand-built elements, not against files, because the rules belong to the element model. Readers are tested against small real files of their format, and must cover what breaks real corpora: an empty file, one huge paragraph, a non-UTF-8 encoding, CRLF line endings, Unicode and CJK text, and a file that is not the format its extension claims.
 
 ## Containers
 

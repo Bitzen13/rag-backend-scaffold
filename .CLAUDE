@@ -10,6 +10,11 @@ Read the following files in order before implementing or making any architectura
 6. `context/project-phases.md` — current phase and instructions for each
 7. `context/get-started.md` — local setup and run steps
 
+Then, when the work touches extraction or chunking:
+
+8. `context/chunking-guide.md` — which chunking strategy and options suit which content, and how to measure a change
+9. `context/adding-a-reader.md` — the element model, and how to support a new file format
+
 If implementation changes the architecture, scope, or standards documented in the context files, update the relevant file before continuing.
 
 ## Stack
