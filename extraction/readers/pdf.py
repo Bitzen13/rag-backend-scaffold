@@ -9,6 +9,8 @@ from extraction.readers.base import ReadResult
 class PdfReader:
     """Reads PDFs, including their tables, headings and reading order (see extraction/pdf)."""
 
+    version = 1  # bump to force re-extraction of documents this reader read
+
     def __init__(self, options: PdfOptions | None = None) -> None:
         self._options = options or PdfOptions()
 

@@ -45,7 +45,8 @@
 | id | UUID (PK) | |
 | source_type | text | e.g. pdf, web, notion, csv |
 | source_uri | text | path/URL/identifier |
-| content_hash | text | SHA-256, drives change detection |
+| source_hash | text | SHA-256 of the source's raw bytes; gates whether the file is opened at all (migration 0004) |
+| content_hash | text | SHA-256 of the extracted text; gates whether it is re-chunked and re-embedded |
 | last_ingested_at | timestamptz | |
 | status | text | active / stale / deleted (enforced by a CHECK constraint) |
 | metadata | jsonb | source-specific metadata, including which reader produced it |
@@ -53,7 +54,9 @@
 
 Constraint: `UNIQUE (source_type, source_uri)` — a source is identified by its type and URI, which is what change detection looks up.
 
-`chunking` holds `{strategy, chunk_size, chunk_overlap, prose_splitting, max_chunk_tokens, tokenizer}`. Phase 6 compares it against `config.yaml` so that changing a document's chunking settings re-chunks it, which a content hash alone cannot detect.
+`chunking` holds `{strategy, chunk_size, chunk_overlap, prose_splitting, max_chunk_tokens, tokenizer, reader, reader_version}`. Every run compares it against what `config.yaml` and the registry would produce now, so changing a document's chunking settings — or bumping a reader's version — re-chunks it, which no hash of the file can detect. The comparison needs no extraction: it is config against a stored value.
+
+**Two hashes, because they answer different questions.** `source_hash` is of the file's raw bytes and answers "must I open this at all"; `content_hash` is of the extracted text and answers "did opening it produce something different, so it needs re-embedding". Neither replaces the other. mtime and size are deliberately not used as the cheap signal: hashing the whole corpus costs 31ms, so a `stat()` fast path saves nothing worth having, and mtime lies — cloud sync, `cp -p` and rsync without checksums all preserve it while content changes, and a silently stale chunk is a wrong answer.
 
 **chunks**
 | Column | Type | Notes |
@@ -167,7 +170,7 @@ This request/response shape is the contract the frontend template (and any other
 
 ## 6. Data Flow Summary
 
-**Ingestion:** Source → Extractor → Chunker → Embedder → Vector DB (+ sources/chunks rows in Postgres, content_hash updated)
+**Ingestion:** Candidates (raw hashes, no parsing) → what changed? → Extractor → Chunker → Embedder → Vector DB (+ sources/chunks rows in Postgres, both hashes updated); sources that have gone are marked `deleted` and their chunks and vectors removed
 
 Implemented in `ingestion/pipeline.py`, one transaction per document.
 
@@ -179,9 +182,11 @@ Implemented in `ingestion/pipeline.py`, one transaction per document.
 
 **The PDF reader** (`extraction/pdf/`) works structure out per document from that document's own statistics, not fixed values: headings are lines larger than the document's body font (or short bold lines) with levels ranked by size; a table's first row is its header unless it is mostly numeric; a table starting a page right after one that reached the bottom continues it (repeated header rows are dropped); the short line above a table is its caption; running headers/footers are removed; text beside a figure is kept as separate paragraphs; multi-column pages are read column by column; paragraphs are joined across page breaks. Tables aligned with whitespace rather than ruling lines are found by `extraction/pdf/borderless.py`, which is deliberately hard to trigger — the rows must agree on column count and position, hold short values, contain no sentence running through a cell, and not read on into one another — because a false positive turns prose into nonsense rows. A page holding an image of text instead of text can be read with OCR (`extraction/pdf/ocr.py`, opt-in, needs Tesseract), which produces words of the same shape as any other page and so goes through the same layout analysis. Corpus-specific cleanup (citation markers, unrendered template text, sections to skip) is configured under `extraction.pdf` as regular expressions. Not supported: OCR of handwriting, `.doc`/`.xls`, slide decks.
 
-**Each source records the plan it was chunked with** in `sources.chunking`, so Phase 6 can detect a configuration change. Phase 5 only records it: an unchanged source (same `content_hash`) is still skipped even if its chunking settings changed. A changed source has its chunks and vectors replaced in the same transaction.
+**Change detection decides before extraction, not after it.** `Extractor.candidates()` enumerates the sources that exist without parsing any of them: each `SourceCandidate` carries its `source_hash`, the reader that would handle it and that reader's version, and parses only when `read()` is called. A run loads the stored state for its `source_type` in one query and opens a document only when it is new, previously marked deleted, changed in its bytes, or recorded against a different plan or reader version. On the sample corpus, enumerating and hashing all nine files (40MB) takes **0.031s** where parsing them takes **69s** — the whole performance case for this shape, and worth about two thousandfold.
 
-The skip currently happens *after* extraction, not before it: every document is extracted and chunked on every run, and only embedding and storage are skipped. `content_hash` is a hash of the extracted text, so it cannot be computed without parsing the file — which is why avoiding the parse is a Phase 6 change (a hash of the raw bytes, and a lazy extractor) rather than a tuning detail. On the sample corpus a fully-unchanged re-run spends about 49 seconds re-parsing to skip everything.
+Documents are then processed one at a time and streamed: nothing beyond a single document's chunks is ever held in memory. A changed source has its chunks and vectors replaced in the same transaction. A source that is opened but turns out to produce identical text has its new `source_hash` recorded and is not re-embedded.
+
+**Deletion comes for free from the candidate list**, which is exactly the set of sources that still exist. Anything stored, not already deleted, and missing from it is marked `deleted` and loses its chunks and vectors in one transaction.
 
 **Measurement.** `scripts/ingest.py --dry-run` reports chunk quality per document and for the corpus (size distribution, oversized, empty, undersized, duplicates, chunks that start mid-sentence or end mid-word, chunks that are mostly a URL), writes every chunk to `chunked/` for inspection, and can record the report as JSON; it needs no database and no API keys. `scripts/evaluate.py` measures retrieval itself — recall@k and MRR over `evaluation/questions.yaml`, through the same `Retriever` the API uses — and can record a baseline and fail on a regression against it. `--check-dataset` tells a typo in the evaluation set apart from a retrieval failure by re-chunking the corpus and reporting the cases no chunk can satisfy.
 

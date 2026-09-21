@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from chunking.base import ChunkingStrategyError
 from chunking.factory import ConfiguredChunkers
 from evaluation.dataset import EvalCase
-from extraction.base import Extractor
+from extraction.base import Extractor, read_all
 from settings import ChunkingStrategy
 
 logger = logging.getLogger(__name__)
@@ -56,7 +56,7 @@ def check_dataset(
     sources: set[str] = set()
     chunks = 0
     documents = 0
-    for document in extractor.extract():
+    for document in read_all(extractor):
         uri = document.source_uri
         sources.add(uri)
         try:

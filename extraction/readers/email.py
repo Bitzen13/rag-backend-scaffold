@@ -113,6 +113,8 @@ def render_message(message: Message) -> str:
 class EmailReader:
     """Reads a single message (.eml, .msg-as-mime) or an mbox archive."""
 
+    version = 1  # bump to force re-extraction of documents this reader read
+
     @property
     def name(self) -> str:
         return "email"

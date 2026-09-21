@@ -38,6 +38,8 @@ class Reader(Protocol):
     def name(self) -> str: ...  # recorded in the document's metadata
     @property
     def extensions(self) -> tuple[str, ...]: ...  # lower-case, with the leading dot
+    @property
+    def version(self) -> int: ...  # bump it when this reader's output changes
     def read(self, path: Path) -> ReadResult: ...
 ```
 
@@ -45,6 +47,8 @@ A minimal reader:
 
 ```python
 class RtfReader:
+    version = 1  # bump to force re-extraction of documents this reader read
+
     @property
     def name(self) -> str:
         return "rtf"
@@ -110,6 +114,17 @@ traceable back to the source. Do not assign offsets by hand.
    format, the element model is missing a field or a kind — extend it, in `extraction/base.py`.
 8. **Log and continue on partial failure.** A sheet that cannot be read should not lose the
    workbook.
+9. **Bump `version` when you change what the reader extracts.** Ingestion skips a source whose
+   raw bytes are unchanged, and improving a reader does not change anybody's files — so without
+   the bump your improvement reaches new documents only, never the ones already ingested. The
+   version is stored per source in `sources.chunking`, and a run that sees a different one
+   re-extracts, re-chunks and re-embeds every document that reader handles. A fix that only
+   changes which files raise `ReaderError`, or the wording of a log line, needs no bump.
+
+   The same applies, without an automatic lever, to reader *configuration*: changing
+   `extraction.pdf.skip_sections` or `strip_patterns` changes the extracted text but is not part
+   of the recorded plan. Bump `PdfReader.version` (or reset the affected sources) when you change
+   those and want already-ingested PDFs re-read.
 
 ## Testing a reader
 

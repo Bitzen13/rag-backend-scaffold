@@ -50,7 +50,9 @@
 - Use parameterized queries or the ORM. Never build SQL by string concatenation.
 - Keep data access in a repository/data layer; route handlers and pipeline stages do not write raw queries.
 - Ingestion writes to Postgres and the vector DB must stay consistent: when a source is re-synced or deleted, remove its stale chunks and vectors in the same operation flow, and keep `chunks.id` matching the vector DB `chunk_id`.
-- Use `content_hash` (SHA-256) for change detection; re-ingest only new or changed sources.
+- Change detection uses two SHA-256 hashes, and they are not interchangeable: `sources.source_hash` (of the raw bytes) decides whether a source is opened at all, and `sources.content_hash` (of the extracted text) decides whether it is re-chunked and re-embedded. Never use mtime or size in their place — a silently stale chunk is a wrong answer, which is worse than a wasted parse.
+- Anything that can be decided without extraction must be decided without it: a run enumerates candidates, loads the stored state for the source type in one query, and only then opens what actually changed. Extraction is the expensive part of a run by two or three orders of magnitude.
+- A reader that changes what it extracts must have its `version` bumped. The file's bytes do not change when a reader improves, so without that bump the improvement never reaches documents that are already ingested.
 
 ## API Routes
 

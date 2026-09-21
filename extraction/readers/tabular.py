@@ -109,6 +109,8 @@ def _rows_to_elements(
 class CsvReader:
     """Delimited text: comma, semicolon, tab or pipe separated."""
 
+    version = 1  # bump to force re-extraction of documents this reader read
+
     @property
     def name(self) -> str:
         return "csv"
@@ -137,6 +139,8 @@ class CsvReader:
 
 class ExcelReader:
     """Excel workbooks, one table per worksheet. Formulas are read as their last cached value."""
+
+    version = 1  # bump to force re-extraction of documents this reader read
 
     @property
     def name(self) -> str:

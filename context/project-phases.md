@@ -1,6 +1,6 @@
 # Project Phases
 
-**Current phase: Phase 6 — Change Detection & Re-sync** (Phases 1–5: COMPLETE)
+**Current phase: Phase 7 — API & Authentication** (Phases 1–6: COMPLETE)
 
 Phases are ordered by dependency: each builds on the previous one, and the first working end-to-end path (ingest, then query) already exists as scripts (`scripts/ingest.py`, `scripts/ask.py`); the public API arrives in Phase 7. Do not start a phase until the previous phase's "Done when" criteria are met. Update the current phase marker above as work progresses.
 
@@ -92,67 +92,75 @@ Every case retrieved its expected passage; 17 of 25 at rank 1, 7 at rank 2, 1 at
 
 **Done when (met):** the evaluation harness and QA report exist and both baselines are recorded (`evaluation/baselines/chunk-qa.json`, `evaluation/baselines/retrieval.json`); the readers listed above are implemented and tested; sentence-aware splitting works and is selectable per document; sizing is token-accurate with a hard cap; each source records the strategy and parameters it was chunked with; and no optional extra was adopted, so none needs a measured improvement.
 
-## Phase 6 — Change Detection & Re-sync
+## Phase 6 — Change Detection & Re-sync — COMPLETE
 
 **Goal:** Keep the index in step with changing sources, and do it without re-reading work that has
 not changed.
 
-### Decide before touching a file
+### What was built
 
-The skip has to happen *before* extraction, not after it. Phase 5 leaves it after: the pipeline
-extracts and chunks every document, then compares hashes and skips. Measured on the sample corpus
-(9 files, 40MB), a re-run with nothing changed spends **49s** parsing PDFs in order to skip all
-nine, while hashing every file's raw bytes takes **0.05s**. That is the whole of this phase's
-performance case, and it is worth about a thousandfold.
+**The extractor became lazy, and the skip moved in front of extraction.** `Extractor.extract()`
+yielded fully-parsed documents, so there was nothing cheaper to ask it for. It is now
+`Extractor.candidates()` (plus a `source_type`), yielding `SourceCandidate`s that carry a
+`source_hash` of the raw bytes, the reader that would handle the file and that reader's version,
+and parse only when `read()` is called. One method rather than two that can drift, laziness
+visible in the type, and it streams — which also fixed the latent problem in Phase 5's pipeline,
+where every document *and* every chunk list was held in memory before anything was stored.
+`extraction.base.read_all()` is the adapter for the tools that want all the text and no change
+detection (`ingest.py --dry-run`, `evaluate.py --check-dataset`).
 
-- **Two hashes, because they answer different questions.** Add a hash of the file's **raw bytes**
-  (`sources.source_hash`, or a key in `sources.metadata`) alongside the existing
-  `sources.content_hash`, which is a hash of the *extracted text*. The raw hash gates "do I need
-  to open this file at all"; the text hash gates "did opening it produce something different, so
-  it needs re-embedding". Neither replaces the other.
-- **Do not use mtime and size** as the cheap signal. Hashing the whole corpus already costs 50ms,
-  so a `stat()`-based fast path saves nothing worth having, and mtime lies: cloud sync, `cp -p`
-  and rsync without checksums all preserve it while content changes. A silently stale chunk is a
-  wrong answer, which is a worse failure than a wasted parse.
-- **Give the extractor a lazy shape.** `Extractor.extract()` currently yields fully-parsed
-  documents, so there is nothing cheaper to ask it for. Replace it with candidate enumeration:
+**Two hashes, because they answer different questions.** `sources.source_hash` (migration 0004) is
+of the raw bytes and gates "must I open this file at all"; `sources.content_hash` is of the
+extracted text and gates "did opening it produce something different, so it needs re-embedding".
+mtime and size were rejected as the cheap signal: hashing the corpus already costs 31ms, so a
+`stat()` fast path saves nothing worth having, and mtime lies — cloud sync, `cp -p` and rsync
+without checksums all preserve it while content changes.
 
-      @dataclass(frozen=True)
-      class SourceCandidate:
-          source_type: str
-          source_uri: str
-          source_hash: str                          # of the raw bytes: cheap
-          def read(self) -> ExtractedDocument: ...  # parses only when called
+**The whole decision is made before any file is opened** (`ingestion/changes.py`): a source is
+opened only when it is new, previously marked `deleted`, changed in its bytes, or recorded against
+a different chunking plan or reader version. The stored state for the source type is loaded in one
+query, not one round trip per document, and the run logs the reason each document was opened.
 
-      class Extractor(Protocol):
-          def candidates(self) -> Iterable[SourceCandidate]: ...
+**The recorded plan now names the reader.** `sources.chunking` gained `reader` and
+`reader_version` alongside the chunking settings. A reader *improvement* changes the extracted text
+without changing the file's bytes, so without this a better reader would never reach documents
+already ingested; bumping the version re-extracts, re-chunks and re-embeds everything that reader
+handles. Reader *configuration* (`extraction.pdf.skip_sections` and friends) is deliberately not
+part of the record — bumping `PdfReader.version` is the manual lever, which `adding-a-reader.md`
+documents.
 
-  One method rather than two that can drift, laziness visible in the type, and it streams — which
-  also fixes a latent problem in Phase 5's pipeline, where every document *and* every chunk list
-  is held in memory before anything is stored. It hands this phase its deletion detection for
-  free, since the candidate list is exactly the set of URIs that still exist.
-- **Load the stored state in one query** — `(source_uri, source_hash, content_hash, chunking)` for
-  the source type — instead of a round-trip inside each per-document transaction.
+**Deletion came for free from the candidate list**, which is exactly the set of sources that still
+exist. Anything stored, not already deleted, and missing from it is marked `deleted` and loses its
+chunks and vectors in one transaction. A source that comes back is ingested again, because
+`deleted` is itself a reason to open.
 
-### Then the re-sync itself
+**Reporting.** `scripts/ingest.py` prints added / updated / skipped / removed / failed, and the
+line `opened N of M sources; K never had to be opened`. A source that cannot be read is now a
+reported `failed` rather than a silent omission, and it is never mistaken for a deleted one.
 
-- Re-ingest only new or changed sources; mark sources that no longer appear as candidates
-  `deleted`
-- Compare `sources.chunking` — the plan recorded with each source in Phase 5 (strategy,
-  `chunk_size`, `chunk_overlap`, `prose_splitting`, `tokenizer`) — against `config.yaml`, so
-  changing any of them re-chunks and re-embeds that document on the next run instead of being
-  skipped as unchanged. This check needs no extraction: it is config against a stored value.
-- Record the reader that produced each source, and its version, in the recorded plan. A reader
-  *improvement* changes the extracted text but not the file's bytes, so without this a better
-  reader never reaches already-ingested documents. Bumping the recorded version must force
-  re-extraction.
-- Remove stale chunks and vectors together, keeping Postgres and the vector store consistent
-- Ingest script reports what was added, updated, skipped, and removed, and says how many files it
-  never had to open
+### Measured result
 
-**Done when:** Editing one source document and re-running ingestion opens and reprocesses only
-that document — the others are skipped on their raw hash without being parsed, which the run time
-should show plainly — with no orphaned chunks or vectors left behind; changing a document's
+On the sample corpus (9 files, 40.2MB), enumerating and hashing every source takes **0.031s**,
+where parsing them takes **69.3s** — about a two-thousandfold saving on a run with nothing to do,
+against the 49s/0.05s the phase was planned on. Chunk output is unchanged: `--dry-run` still
+reports 5,767 chunks with zero defects, matching `evaluation/baselines/chunk-qa.json`.
+
+One-time cost on upgrade: existing rows have no raw hash and their recorded plan does not name a
+reader, so the first run opens every source. Sources whose extracted text is unchanged are not
+re-embedded, so that pass costs parsing time and no embedding bill.
+
+**Testing.** 352 tests pass (was 336), including against a real Postgres. New coverage: a raw hash
+is of the bytes and not the text; candidates parse nothing until `read()`; an unchanged source is
+skipped with the extractor never opened; only the changed document is opened; a file whose bytes
+changed but whose text did not records the new hash without re-embedding; changed chunking settings
+re-chunk an unchanged document; a bumped reader version re-extracts; a deleted source is marked
+`deleted` and loses its chunks and vectors with no orphans; a source already deleted is not removed
+twice; a deleted source that returns is re-ingested; an unreadable source fails without being
+treated as deleted; a document with no configured strategy fails without being opened.
+
+**Done when (met):** editing one source document and re-running ingestion opens and reprocesses
+only that document — the others are skipped on their raw hash without being parsed, and the run
+time shows it plainly — with no orphaned chunks or vectors left behind; changing a document's
 chunking settings in config re-chunks it on the next run; deleting a source file marks it
 `deleted` and removes its chunks and vectors; and bumping a reader's recorded version re-extracts
 the documents that reader handles.

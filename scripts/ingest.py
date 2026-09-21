@@ -28,6 +28,7 @@ from db.session import (
     database_url_from_settings,
 )
 from embedding.factory import build_embedding_provider
+from extraction.base import read_all
 from extraction.factory import build_extractor
 from ingestion.pipeline import IngestionPipeline, IngestionReport, Outcome
 from settings import ExtractionConfig, Settings, get_settings
@@ -42,8 +43,8 @@ def print_report(report: IngestionReport) -> None:
     for result in report.results:
         suffix = f" ({result.detail})" if result.detail else ""
         print(f"{result.outcome.value:>8}  {result.source_uri}{suffix}")
-    counts = ", ".join(f"{len(report.of(o))} {o.value}" for o in Outcome)
-    print(f"\nDone: {counts}.")
+    print(f"\nDone: {report.counts()}.")
+    print(report.opening_summary() + ".")
 
 
 def dry_run(settings: Settings, extraction: ExtractionConfig, qa_json: Path | None) -> int:
@@ -54,7 +55,7 @@ def dry_run(settings: Settings, extraction: ExtractionConfig, qa_json: Path | No
     chunkers: ConfiguredChunkers = build_chunkers(settings)
     reports: list[ChunkQaReport] = []
     missing = 0
-    for document in build_extractor(extraction).extract():
+    for document in read_all(build_extractor(extraction)):
         uri = document.source_uri
         try:
             plan = chunkers.plan_for(uri)

@@ -6,6 +6,7 @@ not the database or an embedding provider.
 
 import uuid
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -16,7 +17,7 @@ from evaluation.check import check_dataset
 from evaluation.dataset import DatasetError, EvalCase, load_dataset
 from evaluation.harness import EvalRun, RetrievalHarness, format_run
 from evaluation.metrics import CaseResult, mean_reciprocal_rank, recall_at, summarize
-from extraction.base import ExtractedDocument
+from extraction.base import ExtractedDocument, SourceCandidate
 from retrieval.retriever import RetrievedChunk
 from settings import ChunkingConfig
 from vector_store.base import VectorFilter
@@ -229,12 +230,30 @@ def test_a_missing_evaluation_set_is_reported(tmp_path: Path) -> None:
 # --- checking the dataset against the corpus -------------------------------------------------
 
 
+@dataclass(frozen=True, kw_only=True)
+class FakeCandidate(SourceCandidate):
+    document: ExtractedDocument
+
+    def read(self) -> ExtractedDocument:
+        return self.document
+
+
 class FakeExtractor:
+    source_type = "file"
+
     def __init__(self, documents: list[ExtractedDocument]) -> None:
         self._documents = documents
 
-    def extract(self) -> list[ExtractedDocument]:
-        return self._documents
+    def candidates(self) -> list[FakeCandidate]:
+        return [
+            FakeCandidate(
+                source_type=d.source_type,
+                source_uri=d.source_uri,
+                source_hash=d.source_uri,
+                document=d,
+            )
+            for d in self._documents
+        ]
 
 
 def chunkers_for(uri: str) -> ConfiguredChunkers:

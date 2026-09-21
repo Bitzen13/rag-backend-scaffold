@@ -61,6 +61,8 @@ def split_table_row(line: str) -> list[str]:
 
 
 class MarkdownReader:
+    version = 1  # bump to force re-extraction of documents this reader read
+
     @property
     def name(self) -> str:
         return "markdown"

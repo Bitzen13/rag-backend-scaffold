@@ -57,6 +57,8 @@ def _record_keys(records: list[Json]) -> list[str]:
 class StructuredReader:
     """Reads .json, .jsonl/.ndjson and .yaml/.yml."""
 
+    version = 1  # bump to force re-extraction of documents this reader read
+
     @property
     def name(self) -> str:
         return "structured"

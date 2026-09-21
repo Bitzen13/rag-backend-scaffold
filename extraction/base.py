@@ -1,11 +1,14 @@
 """Extractor contract. Implementations are selected from `extraction.provider` in config.yaml."""
 
-from collections.abc import Iterable
+import logging
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Protocol
 
 from db.models import JsonObject
+
+logger = logging.getLogger(__name__)
 
 
 class ElementKind(StrEnum):
@@ -62,7 +65,52 @@ class ExtractedDocument:
     elements: tuple[DocumentElement, ...] = ()  # empty for sources with no known structure
 
 
+class ExtractionError(RuntimeError):
+    """One source could not be read. The run reports it and carries on with the others."""
+
+
+@dataclass(frozen=True, kw_only=True)
+class SourceCandidate:
+    """A source that exists right now, identified without being parsed.
+
+    Enumerating candidates is deliberately cheap — a hash of the raw bytes, and the name of the
+    reader that would parse them — so a run can decide whether a document needs opening at all
+    before paying for the parse. Parsing happens in `read()` and nowhere else.
+    """
+
+    source_type: str
+    source_uri: str  # with source_type, the sources unique key
+    source_hash: str  # of the raw bytes; "" when it could not be computed, which forces a read
+    reader: str = ""  # the reader that will parse it, known from the extension alone
+    reader_version: int = 0  # bumping it re-extracts every document this reader handles
+
+    def read(self) -> ExtractedDocument:
+        """Parse this source. Raises ExtractionError if it cannot be read."""
+        raise NotImplementedError
+
+
 class Extractor(Protocol):
-    def extract(self) -> Iterable[ExtractedDocument]:
-        """Yield every document currently present in the source."""
+    @property
+    def source_type(self) -> str:
+        """The `sources.source_type` every candidate of this extractor carries."""
         ...
+
+    def candidates(self) -> Iterable[SourceCandidate]:
+        """Every source present right now, enumerated without parsing any of them.
+
+        The result is also the set of sources that still exist, which is what a run compares
+        against stored state to find the ones that have been deleted.
+        """
+        ...
+
+
+def read_all(extractor: Extractor) -> Iterator[ExtractedDocument]:
+    """Every source, parsed — for the tools that want all the text and no change detection.
+
+    A source that cannot be read is logged and left out, so one bad file never stops a run.
+    """
+    for candidate in extractor.candidates():
+        try:
+            yield candidate.read()
+        except ExtractionError as exc:
+            logger.warning("skipping %s", exc)

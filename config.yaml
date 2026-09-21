@@ -47,6 +47,8 @@ chunking:
     Outer_space.pdf: document_aware
     Rocket.pdf: document_aware
     Uncrewed_spacecraft.pdf: document_aware
+    Stellar_classification.pdf: document_aware
+    Carbon_star.pdf: document_aware
 
 retrieval:
   top_k: 5

@@ -1,6 +1,7 @@
 import hashlib
 import logging
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
 
 import pytest
 from sqlalchemy import func, select
@@ -11,17 +12,50 @@ from chunking.fixed_size import FixedSizeChunker
 from chunking.tokenizer import WordTokenizer
 from db.models import EMBEDDING_DIMENSIONS, Chunk, ChunkVector, Source
 from embedding.base import EmbeddingError
-from extraction.base import ExtractedDocument
+from extraction.base import ExtractedDocument, ExtractionError, SourceCandidate
 from ingestion.pipeline import IngestionPipeline, Outcome, ProgressTracker, format_duration
 from vector_store.pgvector_store import PgVectorStore
 
 
-class FakeExtractor:
-    def __init__(self, documents: Iterable[ExtractedDocument]) -> None:
-        self.documents = list(documents)
+@dataclass(frozen=True, kw_only=True)
+class FakeCandidate(SourceCandidate):
+    """A source whose text is held in memory, and which records whether it was ever opened."""
 
-    def extract(self) -> Iterable[ExtractedDocument]:
-        return list(self.documents)
+    document: ExtractedDocument | None  # None means the source cannot be read
+    opened: list[str]
+
+    def read(self) -> ExtractedDocument:
+        self.opened.append(self.source_uri)
+        if self.document is None:
+            raise ExtractionError(f"{self.source_uri}: unreadable")
+        return self.document
+
+
+class FakeExtractor:
+    source_type = "file"
+
+    def __init__(self, documents: Sequence[ExtractedDocument | FakeCandidate]) -> None:
+        self.opened: list[str] = []
+        self._documents = list(documents)
+
+    def candidates(self) -> list[FakeCandidate]:
+        candidates = []
+        for entry in self._documents:
+            if isinstance(entry, FakeCandidate):
+                candidates.append(replace(entry, opened=self.opened))
+            else:
+                candidates.append(
+                    FakeCandidate(
+                        source_type=entry.source_type,
+                        source_uri=entry.source_uri,
+                        source_hash=hashlib.sha256(entry.text.encode()).hexdigest(),
+                        reader="fake",
+                        reader_version=1,
+                        document=entry,
+                        opened=self.opened,
+                    )
+                )
+        return candidates
 
 
 PLAN = ChunkPlan(
@@ -37,14 +71,15 @@ PLAN = ChunkPlan(
 class FakeChunkers:
     """Resolver that only knows the documents it is given (no default strategy)."""
 
-    def __init__(self, known: set[str]) -> None:
+    def __init__(self, known: set[str], plan: ChunkPlan = PLAN) -> None:
         self._known = known
-        self._chunker = FixedSizeChunker(PLAN, WordTokenizer())
+        self._plan = plan
+        self._chunker = FixedSizeChunker(plan, WordTokenizer())
 
     def plan_for(self, source_uri: str) -> ChunkPlan:
         if source_uri not in self._known:
             raise ChunkingStrategyError(f"no chunking strategy set for {source_uri!r}")
-        return PLAN
+        return self._plan
 
     def for_document(self, source_uri: str) -> Chunker:
         self.plan_for(source_uri)
@@ -75,11 +110,18 @@ def doc(uri: str, text: str) -> ExtractedDocument:
 
 
 def make_pipeline(
-    session: AsyncSession, documents: list[ExtractedDocument], embedder: FakeEmbedder
+    session: AsyncSession,
+    documents: Sequence[ExtractedDocument | FakeCandidate],
+    embedder: FakeEmbedder,
+    *,
+    plan: ChunkPlan = PLAN,
+    extractor: FakeExtractor | None = None,
 ) -> IngestionPipeline:
+    extractor = extractor or FakeExtractor(documents)
+    known = {c.source_uri for c in extractor.candidates() if c.source_uri != "nostrategy.md"}
     return IngestionPipeline(
-        extractor=FakeExtractor(documents),
-        chunkers=FakeChunkers({d.source_uri for d in documents if d.source_uri != "nostrategy.md"}),
+        extractor=extractor,
+        chunkers=FakeChunkers(known, plan),
         embedder=embedder,
         session_factory=lambda: session,
         vector_store_factory=PgVectorStore,
@@ -101,6 +143,7 @@ async def test_ingest_populates_sources_chunks_and_vectors(session: AsyncSession
     assert [(r.source_uri, r.outcome) for r in report.results] == [("a.md", Outcome.ADDED)]
     source = (await session.execute(select(Source))).scalar_one()
     assert source.content_hash == hashlib.sha256(TEXT.encode()).hexdigest()
+    assert source.source_hash == hashlib.sha256(TEXT.encode()).hexdigest()
     assert (source.source_type, source.source_uri, source.status) == ("file", "a.md", "active")
     assert source.metadata_ == {"filename": "a.md"}
 
@@ -112,34 +155,215 @@ async def test_ingest_populates_sources_chunks_and_vectors(session: AsyncSession
     assert vectors[0].metadata_["source_uri"] == "a.md"
 
 
-async def test_unchanged_source_is_skipped_without_embedding(session: AsyncSession) -> None:
+async def test_the_recorded_plan_holds_the_chunking_settings_and_the_reader(
+    session: AsyncSession,
+) -> None:
+    await make_pipeline(session, [doc("a.md", TEXT)], FakeEmbedder()).run()
+    source = (await session.execute(select(Source))).scalar_one()
+    assert source.chunking == {
+        **PLAN.as_metadata(),
+        "reader": "fake",
+        "reader_version": 1,
+    }
+
+
+# --- change detection: what a run can decide without opening a file ----------------------------
+
+
+async def test_an_unchanged_source_is_skipped_without_being_opened(session: AsyncSession) -> None:
     embedder = FakeEmbedder()
     await make_pipeline(session, [doc("a.md", TEXT)], embedder).run()
     calls = embedder.calls
+    await session.commit()
 
-    report = await make_pipeline(session, [doc("a.md", TEXT)], embedder).run()
+    extractor = FakeExtractor([doc("a.md", TEXT)])
+    report = await make_pipeline(session, [], embedder, extractor=extractor).run()
 
     assert [r.outcome for r in report.results] == [Outcome.SKIPPED]
+    assert report.results[0].detail == "unchanged, not opened"
+    assert extractor.opened == []  # the whole point: no parse at all
+    assert (report.opened, report.unopened) == (0, 1)
     assert embedder.calls == calls
     assert await count(session, Chunk) == 3
 
 
-async def test_changed_source_replaces_chunks_and_vectors(session: AsyncSession) -> None:
+async def test_a_changed_source_is_opened_and_replaces_its_chunks_and_vectors(
+    session: AsyncSession,
+) -> None:
     await make_pipeline(session, [doc("a.md", TEXT)], FakeEmbedder()).run()
     old_ids = set((await session.execute(select(Chunk.id))).scalars())
     await session.commit()  # the pipeline opens its own transaction on this shared session
 
-    report = await make_pipeline(
-        session, [doc("a.md", "just four words here")], FakeEmbedder()
-    ).run()
+    extractor = FakeExtractor([doc("a.md", "just four words here")])
+    report = await make_pipeline(session, [], FakeEmbedder(), extractor=extractor).run()
 
     assert [r.outcome for r in report.results] == [Outcome.UPDATED]
+    assert extractor.opened == ["a.md"]
     new_ids = set((await session.execute(select(Chunk.id))).scalars())
     assert len(new_ids) == 1
     assert not new_ids & old_ids
     assert await count(session, ChunkVector) == 1
     source = (await session.execute(select(Source))).scalar_one()
     assert source.content_hash == hashlib.sha256(b"just four words here").hexdigest()
+
+
+async def test_only_the_changed_document_is_opened(session: AsyncSession) -> None:
+    await make_pipeline(session, [doc("a.md", TEXT), doc("b.md", TEXT)], FakeEmbedder()).run()
+    await session.commit()
+
+    extractor = FakeExtractor([doc("a.md", TEXT), doc("b.md", "quite different words now")])
+    report = await make_pipeline(session, [], FakeEmbedder(), extractor=extractor).run()
+
+    assert extractor.opened == ["b.md"]
+    assert {(r.source_uri, r.outcome) for r in report.results} == {
+        ("a.md", Outcome.SKIPPED),
+        ("b.md", Outcome.UPDATED),
+    }
+    assert (report.opened, report.unopened) == (1, 1)
+
+
+async def test_a_file_whose_bytes_changed_but_text_did_not_is_not_re_embedded(
+    session: AsyncSession,
+) -> None:
+    embedder = FakeEmbedder()
+    await make_pipeline(session, [doc("a.md", TEXT)], embedder).run()
+    calls = embedder.calls
+    await session.commit()
+
+    # Same extracted text, different raw bytes (a reformatted file, a changed line ending).
+    extractor = FakeExtractor(
+        [
+            FakeCandidate(
+                source_type="file",
+                source_uri="a.md",
+                source_hash="a-brand-new-raw-hash",
+                reader="fake",
+                reader_version=1,
+                document=doc("a.md", TEXT),
+                opened=[],
+            )
+        ]
+    )
+    report = await make_pipeline(session, [], embedder, extractor=extractor).run()
+
+    assert [(r.outcome, r.detail) for r in report.results] == [(Outcome.SKIPPED, "text unchanged")]
+    assert extractor.opened == ["a.md"]  # it had to be opened to find that out
+    assert embedder.calls == calls
+    # The new raw hash is recorded, so the next run skips it without opening it.
+    source = (await session.execute(select(Source))).scalar_one()
+    assert source.source_hash == "a-brand-new-raw-hash"
+
+
+async def test_changed_chunking_settings_re_chunk_a_document_that_did_not_change(
+    session: AsyncSession,
+) -> None:
+    await make_pipeline(session, [doc("a.md", TEXT)], FakeEmbedder()).run()
+    assert await count(session, Chunk) == 3
+    await session.commit()
+
+    bigger = replace(PLAN, chunk_size=12, chunk_overlap=0)
+    extractor = FakeExtractor([doc("a.md", TEXT)])
+    report = await make_pipeline(
+        session, [], FakeEmbedder(), plan=bigger, extractor=extractor
+    ).run()
+
+    assert [r.outcome for r in report.results] == [Outcome.UPDATED]
+    assert extractor.opened == ["a.md"]
+    assert await count(session, Chunk) == 1  # 12 words now fit in one chunk
+    assert await count(session, ChunkVector) == 1
+    source = (await session.execute(select(Source))).scalar_one()
+    assert source.chunking["chunk_size"] == 12
+
+
+async def test_bumping_a_readers_version_re_extracts_the_documents_it_read(
+    session: AsyncSession,
+) -> None:
+    await make_pipeline(session, [doc("a.md", TEXT)], FakeEmbedder()).run()
+    await session.commit()
+
+    improved = FakeCandidate(
+        source_type="file",
+        source_uri="a.md",
+        source_hash=hashlib.sha256(TEXT.encode()).hexdigest(),  # the file itself is untouched
+        reader="fake",
+        reader_version=2,
+        document=doc("a.md", "the improved reader found other words"),
+        opened=[],
+    )
+    extractor = FakeExtractor([improved])
+    report = await make_pipeline(session, [], FakeEmbedder(), extractor=extractor).run()
+
+    assert [r.outcome for r in report.results] == [Outcome.UPDATED]
+    assert extractor.opened == ["a.md"]
+    source = (await session.execute(select(Source))).scalar_one()
+    assert source.chunking["reader_version"] == 2
+
+
+async def test_the_reason_a_document_was_opened_is_logged(
+    session: AsyncSession, caplog: pytest.LogCaptureFixture
+) -> None:
+    await make_pipeline(session, [doc("a.md", TEXT)], FakeEmbedder()).run()
+    await session.commit()
+
+    with caplog.at_level(logging.INFO, logger="ingestion.pipeline"):
+        await make_pipeline(
+            session, [doc("a.md", "entirely different text here")], FakeEmbedder()
+        ).run()
+
+    assert any("opening a.md: the file changed" in r.getMessage() for r in caplog.records)
+
+
+# --- re-sync: sources that have gone -----------------------------------------------------------
+
+
+async def test_a_deleted_source_is_marked_deleted_and_loses_its_chunks_and_vectors(
+    session: AsyncSession,
+) -> None:
+    await make_pipeline(session, [doc("a.md", TEXT), doc("b.md", TEXT)], FakeEmbedder()).run()
+    await session.commit()
+
+    extractor = FakeExtractor([doc("a.md", TEXT)])  # b.md is gone from the corpus
+    report = await make_pipeline(session, [], FakeEmbedder(), extractor=extractor).run()
+
+    removed = report.of(Outcome.REMOVED)
+    assert [r.source_uri for r in removed] == ["b.md"]
+    rows = (await session.execute(select(Source.source_uri, Source.status))).all()
+    assert {row.source_uri: row.status for row in rows} == {"a.md": "active", "b.md": "deleted"}
+    # No orphans: a.md keeps its 3 chunks, b.md keeps none.
+    assert await count(session, Chunk) == 3
+    assert await count(session, ChunkVector) == 3
+
+
+async def test_a_source_already_marked_deleted_is_not_removed_again(
+    session: AsyncSession,
+) -> None:
+    await make_pipeline(session, [doc("a.md", TEXT)], FakeEmbedder()).run()
+    await session.commit()
+    await make_pipeline(session, [], FakeEmbedder(), extractor=FakeExtractor([])).run()
+    await session.commit()
+
+    report = await make_pipeline(session, [], FakeEmbedder(), extractor=FakeExtractor([])).run()
+
+    assert report.results == []
+
+
+async def test_a_deleted_source_that_comes_back_is_ingested_again(session: AsyncSession) -> None:
+    await make_pipeline(session, [doc("a.md", TEXT)], FakeEmbedder()).run()
+    await session.commit()
+    await make_pipeline(session, [], FakeEmbedder(), extractor=FakeExtractor([])).run()
+    await session.commit()
+
+    extractor = FakeExtractor([doc("a.md", TEXT)])
+    report = await make_pipeline(session, [], FakeEmbedder(), extractor=extractor).run()
+
+    assert [r.outcome for r in report.results] == [Outcome.UPDATED]
+    assert extractor.opened == ["a.md"]  # the raw hash matches, but it was not active
+    source = (await session.execute(select(Source))).scalar_one()
+    assert source.status == "active"
+    assert await count(session, Chunk) == 3
+
+
+# --- failures -----------------------------------------------------------------------------------
 
 
 async def test_blank_document_is_skipped(session: AsyncSession) -> None:
@@ -160,18 +384,45 @@ async def test_failed_document_writes_nothing_and_run_continues(session: AsyncSe
     assert sources == ["good.md"]
 
 
-async def test_document_without_a_chunking_strategy_fails_and_others_still_ingest(
+async def test_an_unreadable_source_fails_and_is_not_treated_as_deleted(
+    session: AsyncSession,
+) -> None:
+    await make_pipeline(session, [doc("a.md", TEXT)], FakeEmbedder()).run()
+    await session.commit()
+
+    unreadable = FakeCandidate(
+        source_type="file",
+        source_uri="a.md",
+        source_hash="changed",
+        reader="fake",
+        reader_version=1,
+        document=None,
+        opened=[],
+    )
+    report = await make_pipeline(
+        session, [], FakeEmbedder(), extractor=FakeExtractor([unreadable])
+    ).run()
+
+    assert [(r.source_uri, r.outcome) for r in report.results] == [("a.md", Outcome.FAILED)]
+    source = (await session.execute(select(Source))).scalar_one()
+    assert source.status == "active"  # still there, just not re-read
+    assert await count(session, Chunk) == 3
+
+
+async def test_document_without_a_chunking_strategy_fails_without_being_opened(
     session: AsyncSession,
 ) -> None:
     documents = [doc("nostrategy.md", TEXT), doc("good.md", TEXT)]
+    extractor = FakeExtractor(documents)
 
-    report = await make_pipeline(session, documents, FakeEmbedder()).run()
+    report = await make_pipeline(session, documents, FakeEmbedder(), extractor=extractor).run()
 
     assert [(r.source_uri, r.outcome) for r in report.results] == [
         ("nostrategy.md", Outcome.FAILED),
         ("good.md", Outcome.ADDED),
     ]
     assert "no chunking strategy" in report.results[0].detail
+    assert extractor.opened == ["good.md"]
     assert (await session.execute(select(Source.source_uri))).scalars().all() == ["good.md"]
 
 
@@ -205,12 +456,17 @@ def test_progress_logs_count_percent_and_time_remaining(caplog: pytest.LogCaptur
     ]
 
 
-async def test_run_logs_progress_per_embedding_batch(
+async def test_run_logs_what_it_opened_and_what_it_did_not(
     session: AsyncSession, caplog: pytest.LogCaptureFixture
 ) -> None:
+    await make_pipeline(session, [doc("a.md", TEXT)], FakeEmbedder()).run()
+    await session.commit()
+
     with caplog.at_level(logging.INFO, logger="ingestion.pipeline"):
-        await make_pipeline(session, [doc("a.md", TEXT)], FakeEmbedder()).run()
+        report = await make_pipeline(
+            session, [], FakeEmbedder(), extractor=FakeExtractor([doc("a.md", TEXT)])
+        ).run()
 
     messages = [r.getMessage() for r in caplog.records]
-    assert "chunked 1 documents into 3 chunks" in messages
-    assert any(m.startswith("processed 3/3 chunks (100%)") for m in messages)
+    assert "0 sources need opening; 1 are unchanged and will not be parsed" in messages
+    assert report.opening_summary() == "opened 0 of 1 sources; 1 never had to be opened"

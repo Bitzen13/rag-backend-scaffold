@@ -117,6 +117,8 @@ def _is_comment(line: str) -> bool:
 class CodeReader:
     """Reads source files in the languages listed in LANGUAGES."""
 
+    version = 1  # bump to force re-extraction of documents this reader read
+
     @property
     def name(self) -> str:
         return "code"

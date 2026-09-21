@@ -41,6 +41,8 @@ def _is_numbered(paragraph: Any) -> bool:
 
 
 class DocxReader:
+    version = 1  # bump to force re-extraction of documents this reader read
+
     @property
     def name(self) -> str:
         return "docx"

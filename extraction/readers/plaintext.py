@@ -90,6 +90,8 @@ def looks_like_transcript(lines: list[str]) -> bool:
 class PlainTextReader:
     """Reads .txt and anything else with no dedicated reader."""
 
+    version = 1  # bump to force re-extraction of documents this reader read
+
     @property
     def name(self) -> str:
         return "text"

@@ -115,6 +115,8 @@ def _direct_text(tag: Any) -> str:
 
 
 class HtmlReader:
+    version = 1  # bump to force re-extraction of documents this reader read
+
     @property
     def name(self) -> str:
         return "html"

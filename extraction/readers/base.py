@@ -47,6 +47,17 @@ class Reader(Protocol):
         """Lower-case file extensions this reader handles, including the leading dot."""
         ...
 
+    @property
+    def version(self) -> int:
+        """Bumped by hand whenever this reader's output changes.
+
+        A reader improvement changes the text extracted from a file without changing the file
+        itself, so its raw hash still matches and it would never be re-read. The version is
+        recorded with each source, and bumping it forces re-extraction of every document this
+        reader handles (see context/adding-a-reader.md).
+        """
+        ...
+
     def read(self, path: Path) -> ReadResult:
         """Read one file. Raises ReaderError if the file is not usable as this format."""
         ...

@@ -52,6 +52,10 @@ class Source(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     source_type: Mapped[str] = mapped_column(Text)
     source_uri: Mapped[str] = mapped_column(Text)
+    # Two hashes, because they answer different questions. `source_hash` is of the source's raw
+    # bytes and gates "must this file be opened at all"; `content_hash` is of the extracted text
+    # and gates "did opening it produce something different, so it needs re-embedding".
+    source_hash: Mapped[str] = mapped_column(Text, default="", server_default="")
     content_hash: Mapped[str] = mapped_column(Text)
     last_ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=_NOW)
     status: Mapped[str] = mapped_column(

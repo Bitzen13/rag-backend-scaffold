@@ -6,9 +6,10 @@ Usage: python scripts/reset.py                        # every source, after conf
        python scripts/reset.py --yes                  # skip the confirmation prompt
        python scripts/reset.py --keep-chunked         # leave the chunked/ dry-run output in place
 
-Ingestion skips a document whose `sources` row has the same content_hash, so re-chunking it means
-removing that row. Deleting a source cascades to its `chunks` and `chunk_vectors` in one
-transaction, which is what keeps Postgres and the vector store consistent. The chunk files written
+This is for starting from scratch, not for re-chunking: ingestion already re-chunks a document
+whose settings under `chunking.documents` changed, or whose reader's version was bumped. Deleting
+a source cascades to its `chunks` and `chunk_vectors` in one transaction, which is what keeps
+Postgres and the vector store consistent. The chunk files written
 by `ingest.py --dry-run` go too, since they describe the chunking that was just discarded. API keys
 and query logs are never touched, and the schema itself is left alone — no migration needs
 re-running afterwards.

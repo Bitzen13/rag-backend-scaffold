@@ -44,15 +44,23 @@
 
 9. **Ingest your data**
    python scripts/ingest.py            (or: --path some/other/dir)
+   Re-running it is cheap and is how you re-sync. Every run hashes each file's raw bytes and
+   opens only what is new, changed, or recorded against different chunking settings or a
+   different reader version; a file that has gone is marked `deleted` and its chunks and vectors
+   go with it. The run prints what it added, updated, skipped and removed, and how many sources
+   it never had to open.
+   The first run after upgrading to this version opens every source once: existing rows have no
+   raw hash yet, and the recorded plan did not yet name a reader. Sources whose extracted text is
+   unchanged are not re-embedded, so that pass costs parsing time but no embedding bill.
 
 10. **Start over if you need to**
     python scripts/reset.py --dry-run           (list what is stored, delete nothing)
     python scripts/reset.py                     (delete every source, after confirmation)
     python scripts/reset.py --source notes.md   (just one document; repeatable)
     python scripts/reset.py --keep-chunked      (leave the chunked/ output alone)
-    Ingestion skips a document whose content is unchanged, so re-chunking one means removing its
-    `sources` row first. Deleting a source removes its chunks and vectors with it, in one
-    transaction. The matching `chunked/*.chunks.txt` dry-run output is removed too, unless
+    You rarely need this to re-chunk: changing a document's settings under `chunking.documents`
+    (or bumping a reader's `version`) already re-chunks it on the next run. Reset is for starting
+    from scratch. Deleting a source removes its chunks and vectors with it, in one transaction. The matching `chunked/*.chunks.txt` dry-run output is removed too, unless
     you pass `--keep-chunked`. API keys and query logs are untouched, and the schema stays
     put. Re-ingesting re-embeds, so it costs another run of the embedding bill.
 
