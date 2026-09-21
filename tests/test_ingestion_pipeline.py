@@ -1,14 +1,17 @@
 import hashlib
+import logging
 from collections.abc import Iterable, Sequence
 
+import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from chunking.base import Chunker, ChunkingStrategyError
 from chunking.fixed_size import FixedSizeChunker
 from db.models import EMBEDDING_DIMENSIONS, Chunk, ChunkVector, Source
 from embedding.base import EmbeddingError
 from extraction.base import ExtractedDocument
-from ingestion.pipeline import IngestionPipeline, Outcome
+from ingestion.pipeline import IngestionPipeline, Outcome, ProgressTracker, format_duration
 from vector_store.pgvector_store import PgVectorStore
 
 
@@ -18,6 +21,19 @@ class FakeExtractor:
 
     def extract(self) -> Iterable[ExtractedDocument]:
         return list(self.documents)
+
+
+class FakeChunkers:
+    """Resolver that only knows the documents it is given (no default strategy)."""
+
+    def __init__(self, known: set[str]) -> None:
+        self._known = known
+        self._chunker = FixedSizeChunker(chunk_size=5, chunk_overlap=1)
+
+    def for_document(self, source_uri: str) -> Chunker:
+        if source_uri not in self._known:
+            raise ChunkingStrategyError(f"no chunking strategy set for {source_uri!r}")
+        return self._chunker
 
 
 class FakeEmbedder:
@@ -48,7 +64,7 @@ def make_pipeline(
 ) -> IngestionPipeline:
     return IngestionPipeline(
         extractor=FakeExtractor(documents),
-        chunker=FixedSizeChunker(chunk_size=5, chunk_overlap=1),
+        chunkers=FakeChunkers({d.source_uri for d in documents if d.source_uri != "nostrategy.md"}),
         embedder=embedder,
         session_factory=lambda: session,
         vector_store_factory=PgVectorStore,
@@ -127,3 +143,59 @@ async def test_failed_document_writes_nothing_and_run_continues(session: AsyncSe
     ]
     sources = (await session.execute(select(Source.source_uri))).scalars().all()
     assert sources == ["good.md"]
+
+
+async def test_document_without_a_chunking_strategy_fails_and_others_still_ingest(
+    session: AsyncSession,
+) -> None:
+    documents = [doc("nostrategy.md", TEXT), doc("good.md", TEXT)]
+
+    report = await make_pipeline(session, documents, FakeEmbedder()).run()
+
+    assert [(r.source_uri, r.outcome) for r in report.results] == [
+        ("nostrategy.md", Outcome.FAILED),
+        ("good.md", Outcome.ADDED),
+    ]
+    assert "no chunking strategy" in report.results[0].detail
+    assert (await session.execute(select(Source.source_uri))).scalars().all() == ["good.md"]
+
+
+async def test_chunk_metadata_is_stored_on_vectors(session: AsyncSession) -> None:
+    await make_pipeline(session, [doc("a.md", TEXT)], FakeEmbedder()).run()
+    vector = (await session.execute(select(ChunkVector).limit(1))).scalars().one()
+    assert vector.metadata_["source_uri"] == "a.md"
+    assert "char_start" in vector.metadata_
+
+
+# --- progress logging ------------------------------------------------------------------------
+
+
+def test_format_duration() -> None:
+    assert [format_duration(s) for s in (5, 65, 3725)] == ["5s", "1m 05s", "1h 02m"]
+
+
+def test_progress_logs_count_percent_and_time_remaining(caplog: pytest.LogCaptureFixture) -> None:
+    now = [0.0]
+    progress = ProgressTracker(total=200, clock=lambda: now[0])
+
+    with caplog.at_level(logging.INFO, logger="ingestion.pipeline"):
+        now[0] = 30.0
+        progress.advance(50)  # 25% in 30s -> 90s left
+        now[0] = 120.0
+        progress.advance(150)  # done: no estimate
+
+    assert [r.getMessage() for r in caplog.records] == [
+        "processed 50/200 chunks (25%), elapsed 30s, ~1m 30s remaining",
+        "processed 200/200 chunks (100%), elapsed 2m 00s",
+    ]
+
+
+async def test_run_logs_progress_per_embedding_batch(
+    session: AsyncSession, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.INFO, logger="ingestion.pipeline"):
+        await make_pipeline(session, [doc("a.md", TEXT)], FakeEmbedder()).run()
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert "chunked 1 documents into 3 chunks" in messages
+    assert any(m.startswith("processed 3/3 chunks (100%)") for m in messages)

@@ -214,3 +214,27 @@ async def test_deleting_chunks_cascades_to_vectors(session: AsyncSession) -> Non
     await ChunkRepository(session).delete_by_source(source.id)
 
     assert await vector_count(session) == 0
+
+
+async def test_upsert_larger_than_one_batch(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import vector_store.pgvector_store as store_module
+
+    monkeypatch.setattr(store_module, "UPSERT_BATCH_SIZE", 2)
+    source = await SourceRepository(session).create(
+        source_type="file", source_uri="big.md", content_hash="h"
+    )
+    ids = [uuid.uuid4() for _ in range(5)]
+    await ChunkRepository(session).add_many(
+        [NewChunk(cid, source.id, i, "t", 1, "m") for i, cid in enumerate(ids)]
+    )
+    store = PgVectorStore(session)
+    vector = [1.0] + [0.0] * (EMBEDDING_DIMENSIONS - 1)
+
+    await store.upsert(
+        [VectorRecord(cid, vector, source.id, "file", i) for i, cid in enumerate(ids)]
+    )
+
+    matches = await store.search(vector, top_k=10)
+    assert {m.chunk_id for m in matches} == set(ids)

@@ -27,11 +27,12 @@
    This spins up Postgres (and pgvector, if that's your configured vector DB).
 
 5. **Run database migrations**
-   alembic upgrade head
+   python -m alembic upgrade head
+   (Run from the repo root. Use `python -m alembic`, not the bare `alembic` command, which cannot import the project's modules.)
    (Reads `DATABASE_URL`; a plain `postgresql://` URL is fine, the async driver is applied automatically.)
 
 6. **Configure the pipeline**
-   Edit config.yaml to set chunking strategy, top_k, and model choices for this project.
+   Edit config.yaml to set chunk size/overlap, top_k, and model choices. Every document to ingest must be listed under `chunking.documents` with its strategy (`fixed_size` or `document_aware`). Preview chunks first with `python scripts/ingest.py --dry-run` (writes to `chunked/`).
 
 7. **Implement/configure the extraction module**
    Set `extraction.path` in config.yaml (default: the `data/sample` documents), or add a new extractor in extraction/.

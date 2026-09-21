@@ -38,3 +38,9 @@ def test_factory_builds_filesystem_extractor(tmp_path: Path) -> None:
     (tmp_path / "a.md").write_text("alpha", encoding="utf-8")
     config = ExtractionConfig(provider="filesystem", path=tmp_path)
     assert [d.source_uri for d in build_extractor(config).extract()] == ["a.md"]
+
+
+def test_invalid_characters_are_stripped_from_text_files(tmp_path: Path) -> None:
+    (tmp_path / "a.txt").write_text("nul" + chr(0) + "byte\nsecond line", encoding="utf-8")
+    (doc,) = FilesystemExtractor(tmp_path, [".txt"]).extract()
+    assert doc.text == "nulbyte\nsecond line"

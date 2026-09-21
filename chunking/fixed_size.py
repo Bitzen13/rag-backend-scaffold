@@ -1,6 +1,7 @@
 import re
 
 from chunking.base import TextChunk
+from extraction.base import ExtractedDocument
 
 _WORD = re.compile(r"\S+")
 
@@ -20,7 +21,10 @@ class FixedSizeChunker:
         self._size = chunk_size
         self._step = chunk_size - chunk_overlap
 
-    def chunk(self, text: str) -> list[TextChunk]:
+    def chunk(self, document: ExtractedDocument) -> list[TextChunk]:
+        return self.split_text(document.text)
+
+    def split_text(self, text: str) -> list[TextChunk]:
         words = [m.span() for m in _WORD.finditer(text)]
         chunks: list[TextChunk] = []
         for first in range(0, len(words), self._step):

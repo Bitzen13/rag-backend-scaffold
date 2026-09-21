@@ -1,22 +1,50 @@
 extraction:
   provider: filesystem
   path: data/sample
-  extensions: [.md, .txt]
+  extensions: [.md, .txt, .pdf]
+  # Corpus-specific cleanup for text extracted from PDFs. These are regular expressions and do not
+  # affect how structure (headings, tables, columns) is detected, which is worked out per file.
+  pdf:
+    strip_patterns:              # removed wherever they appear
+      - '\[\d+\]'                # numbered citation markers like [12]
+      - 'style="[^"]*"\s*\|?'    # leftover HTML attributes from web-printed pages
+    truncate_patterns:           # text from the first match onward is dropped
+      - 'Template:'              # unrendered wiki templates
+    skip_sections:               # sections left out entirely (by heading text)
+      - References
 
 chunking:
-  strategy: fixed_size
   chunk_size: 500
   chunk_overlap: 50
+  # Pick a strategy for EACH document (key = path relative to extraction.path). A document that
+  # is not listed here is not ingested. Strategies: fixed_size | document_aware
+  documents:
+    rag-overview.md: fixed_size
+    pipeline-stages.txt: fixed_size
+    List_of_largest_stars.pdf: document_aware
+    Space_exploration.pdf: document_aware
+    Astronomy.pdf: document_aware
+    Human_spaceflight.pdf: document_aware
+    Outer_space.pdf: document_aware
+    Rocket.pdf: document_aware
+    Uncrewed_spacecraft.pdf: document_aware
 
 retrieval:
   top_k: 5
-  similarity_threshold: 0.75
+  similarity_threshold: 0.4
+  excerpt_max_chars: 300
+  # Typo-tolerant keyword search, merged with the vector search (fuzzy_top_k: 0 turns it off).
+  fuzzy_top_k: 5
+  fuzzy_min_similarity: 0.6            # 1.0 = word appears verbatim; lower tolerates more typos
+  fuzzy_max_matches_per_phrase: 50     # a phrase matching more chunks than this is too common
+  fuzzy_min_relative_evidence: 0.5     # drop fuzzy hits weaker than this fraction of the best one
 
 models:
   embedding_provider: openai
   embedding_model: text-embedding-3-small
   llm_provider: anthropic
   llm_model: claude-sonnet-4-6
+  llm_max_tokens: 1024
 
 vector_db:
   provider: pgvector

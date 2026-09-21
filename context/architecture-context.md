@@ -7,10 +7,10 @@
 - **LLM provider:** Configurable — Anthropic or OpenAI, abstracted behind a provider interface
 - **Embedding model:** Configurable — e.g. OpenAI text-embedding-3-small/large, or local sentence-transformers
 - **Vector database:** Configurable — pgvector (default, avoids a separate service), Pinecone, Qdrant, or Weaviate
-- **Relational database:** PostgreSQL — ingestion metadata, chunks, API keys, query logs
+- **Relational database:** PostgreSQL — ingestion metadata, chunks, API keys, query logs; the `pg_trgm` extension powers typo-tolerant keyword retrieval (GIN trigram index on `chunks.text`, migration 0002)
 - **Containerization:** Docker + docker-compose for local dev
 - **Secrets:** Environment variables only
-- **Document parsing libraries:** unstructured, pypdf, beautifulsoup4 (source-dependent, isolated in the extraction module)
+- **Document parsing libraries:** pdfplumber (implemented; see `extraction/pdf/`), unstructured, beautifulsoup4 (source-dependent, isolated in the extraction module)
 - **Chunking libraries:** custom splitters or langchain/llama-index splitters used as libraries only
 
 ## 2. System Boundaries
@@ -99,19 +99,27 @@ extraction:
   extensions: [.md, .txt]
 
 chunking:
-  strategy: fixed_size | semantic
   chunk_size: 500
   chunk_overlap: 50
+  documents:            # strategy chosen manually for EACH document; unlisted = not ingested
+    rag-overview.md: fixed_size          # fixed_size | document_aware
+    List_of_largest_stars.pdf: document_aware
 
 retrieval:
   top_k: 5
-  similarity_threshold: 0.75
+  similarity_threshold: 0.4
+  excerpt_max_chars: 300
+  fuzzy_top_k: 5                       # typo-tolerant keyword hits per question (0 = off)
+  fuzzy_min_similarity: 0.6            # pg_trgm word_similarity; 1.0 = word appears verbatim
+  fuzzy_max_matches_per_phrase: 50     # a phrase matching more chunks than this is too common
+  fuzzy_min_relative_evidence: 0.5     # drop fuzzy hits weaker than this fraction of the best
 
 models:
   embedding_provider: openai
   embedding_model: text-embedding-3-small
   llm_provider: anthropic
   llm_model: claude-sonnet-4-6
+  llm_max_tokens: 1024
 
 vector_db:
   provider: pgvector | pinecone | qdrant | weaviate
@@ -127,7 +135,7 @@ Secrets (ANTHROPIC_API_KEY, OPENAI_API_KEY, DATABASE_URL, VECTOR_DB_URL) come ex
 - **Auth:** X-API-Key header, validated against api_keys.key_hash
 - **Request:** { "question": "string", "filters": { "source_type": "optional" } }
 - **Response:** { "answer": "string", "sources": [{ "chunk_id": "uuid", "source_uri": "string", "excerpt": "string" }] }
-- **Errors:** 401 invalid/missing key, 400 malformed request, 503 upstream (LLM/vector DB) unreachable, 200 with a "no relevant context" answer when retrieval is empty
+- **Errors:** 401 invalid/missing key, 400 malformed request, 503 upstream (LLM/vector DB) unreachable, an empty retrieval is not an error: the LLM is still called, with an empty context, and the response is a normal 200 (with no sources)
 
 This request/response shape is the contract the frontend template (and any other consumer) is built against — changes to it must be versioned or made backward-compatible, since consumers are now maintained in separate repos.
 
@@ -137,9 +145,9 @@ This request/response shape is the contract the frontend template (and any other
 
 **Ingestion:** Source → Extractor → Chunker → Embedder → Vector DB (+ sources/chunks rows in Postgres, content_hash updated)
 
-Implemented in `ingestion/pipeline.py`, one transaction per document. Chunk size/overlap are counted in whitespace-delimited words (a tokenizer-free approximation of tokens); only the `fixed_size` strategy is implemented. An unchanged source (same `content_hash`) is skipped; a changed one has its chunks and vectors replaced in the same transaction.
+Implemented in `ingestion/pipeline.py`, one transaction per document. Chunk size/overlap are counted in whitespace-delimited words (a tokenizer-free approximation of tokens); the strategy is chosen per document in `chunking.documents` (key = `source_uri`) with no default — a document without an entry fails ingestion with a message naming it. `fixed_size` is a sliding word window. `document_aware` needs structured extraction (currently PDFs, via `extraction/pdf/`): one chunk per table row (prefixed with its table caption/section, rendered `Header: value | ...`) and prose paragraphs packed under their heading path. The PDF reader works structure out per document from that document's own statistics, not fixed values: headings are lines larger than the document's body font (or short bold lines) with levels ranked by size; a table's first row is its header unless it is mostly numeric; a table starting a page right after one that reached the bottom continues it (repeated header rows are dropped); the short line above a table is its caption; running headers/footers are removed; text beside a figure (captions) is kept as separate paragraphs; multi-column pages are read column by column; paragraphs are joined across page breaks. Corpus-specific cleanup (citation markers, unrendered template text, sections to skip such as References) is configured under `extraction.pdf` in `config.yaml` as regular expressions. Not supported yet: borderless tables (read as prose), scanned PDFs (a warning is logged), OCR. Chunk metadata (`chunk_type`, `table`, `section`, `page`, `row_name`) is stored on the vector record. Changing a document's strategy does not re-chunk an already-ingested, unchanged source. An unchanged source (same `content_hash`) is skipped; a changed one has its chunks and vectors replaced in the same transaction.
 
-**Query:** Client → /api/query (key validated) → question embedded → vector similarity search (+ filters) → top-K chunks fetched from Postgres → prompt assembled → LLM call → answer + citations returned
+**Query:** (Phase 4 implements everything after the API layer: `services/query_service.py` → `retrieval/retriever.py` + `generation/`.) Client → /api/query (key validated) → question embedded → vector similarity search (+ filters) **and** typo-tolerant keyword search → results merged (reciprocal rank fusion) → top-K chunks fetched from Postgres → prompt assembled → LLM call → answer + citations returned
 
 ## 7. Security Considerations
 - API keys stored hashed, revoked via is_active rather than deleted
@@ -147,3 +155,7 @@ Implemented in `ingestion/pipeline.py`, one transaction per document. Chunk size
 - All credentials via environment variables only
 - Input validation/size limits on /api/query before reaching the LLM call
 - CORS: since consumers are now separate deployed applications (e.g., the Next.js frontend calling server-side), CORS is only relevant if a browser ever calls this API directly — server-to-server calls from Next.js Route Handlers aren't subject to CORS, but the backend should still allowlist expected server origins/IPs where feasible
+
+### Retrieval: meaning plus spelling
+Vector search matches meaning but is weak on exact identifiers (a star like "VX Sagittarii" has almost no meaning to embed). So `retrieval/retriever.py` also runs a fuzzy keyword search (`ChunkRepository.fuzzy_search`, pg_trgm `word_similarity`): every 1-3 word phrase of the question (stop-words never start or end a phrase) is compared, by letter trigrams, against chunk text, so misspellings in the question or in the data still match. A phrase matching more than `fuzzy_max_matches_per_phrase` chunks is ignored as too common; chunks are ranked by total evidence (similarity x phrase length summed over phrases), and hits below `fuzzy_min_relative_evidence` of the best are dropped. Vector hits must still reach `similarity_threshold`; fuzzy hits must reach `fuzzy_min_similarity`. The two ranked lists are merged with reciprocal rank fusion, and tied or close chunks are all passed to the LLM, which picks the answer from them.
+

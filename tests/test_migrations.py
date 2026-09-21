@@ -73,3 +73,11 @@ async def test_models_match_migrated_schema(session: AsyncSession) -> None:
 
     connection = await session.connection()
     assert await connection.run_sync(diff) == []
+
+
+async def test_trigram_index_exists(session: AsyncSession) -> None:
+    definition = await session.scalar(
+        text("SELECT indexdef FROM pg_indexes WHERE indexname = 'ix_chunks_text_trgm'")
+    )
+    assert definition is not None
+    assert "gin_trgm_ops" in definition

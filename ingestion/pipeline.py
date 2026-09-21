@@ -7,14 +7,16 @@ Each document is written in its own transaction, so a failure leaves that docume
 import asyncio
 import hashlib
 import logging
+import time
 import uuid
-from collections.abc import Callable
+from collections import Counter
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from chunking.base import Chunker
+from chunking.base import ChunkerResolver, TextChunk
 from db.models import SourceStatus
 from db.repositories.chunks import ChunkRepository, NewChunk
 from db.repositories.sources import SourceRepository
@@ -25,6 +27,8 @@ from vector_store.base import VectorRecord, VectorStore
 logger = logging.getLogger(__name__)
 
 VectorStoreFactory = Callable[[AsyncSession], VectorStore]
+VECTOR_WRITE_BATCH_SIZE = 500  # vectors written per statement; also the granularity of logging
+EMBED_BATCH_SIZE = 96  # chunks per embedding request; also the granularity of progress logging
 SessionFactory = Callable[[], AsyncSession]
 
 
@@ -50,6 +54,74 @@ class IngestionReport:
         return [r for r in self.results if r.outcome == outcome]
 
 
+def log_chunks(uri: str, chunker_name: str, chunks: Sequence[TextChunk]) -> None:
+    """INFO: per-document chunking summary. DEBUG: every chunk with its metadata and a preview."""
+    if not chunks:
+        logger.info("chunked %s with %s: no chunks (no text content)", uri, chunker_name)
+        return
+    sizes = [c.token_count for c in chunks]
+    types = Counter(str(c.metadata.get("chunk_type", "text")) for c in chunks)
+    logger.info(
+        "chunked %s with %s: %d chunks, words min/avg/max = %d/%d/%d, types: %s",
+        uri,
+        chunker_name,
+        len(chunks),
+        min(sizes),
+        sum(sizes) // len(sizes),
+        max(sizes),
+        ", ".join(f"{name}={count}" for name, count in sorted(types.items())),
+    )
+    if logger.isEnabledFor(logging.DEBUG):
+        for chunk in chunks:
+            preview = " ".join(chunk.text.split())[:100]
+            logger.debug(
+                "  %s chunk %d: %d words, chars %d-%d, meta=%s | %s",
+                uri,
+                chunk.index,
+                chunk.token_count,
+                chunk.char_start,
+                chunk.char_end,
+                chunk.metadata,
+                preview,
+            )
+
+
+def format_duration(seconds: float) -> str:
+    minutes, secs = divmod(int(seconds), 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h {minutes:02d}m"
+    return f"{minutes}m {secs:02d}s" if minutes else f"{secs}s"
+
+
+class ProgressTracker:
+    """Logs how many chunks are processed across the whole run, with a time-remaining estimate."""
+
+    def __init__(self, total: int, clock: Callable[[], float] = time.monotonic) -> None:
+        self.total = total
+        self.done = 0
+        self._clock = clock
+        self._started = clock()
+
+    def advance(self, count: int, *, log: bool = True) -> None:
+        self.done += count
+        if not log or self.total == 0:
+            return
+        elapsed = self._clock() - self._started
+        remaining = ""
+        if 0 < self.done < self.total and elapsed > 0:
+            eta = elapsed / self.done * (self.total - self.done)
+            remaining = f", ~{format_duration(eta)} remaining"
+        logger.info(
+            "processed %d/%d chunks (%d%%), elapsed %s%s",
+            self.done,
+            self.total,
+            self.done * 100 // self.total,
+            format_duration(elapsed),
+            remaining,
+        )
+
+
 def hash_content(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -59,28 +131,68 @@ class IngestionPipeline:
         self,
         *,
         extractor: Extractor,
-        chunker: Chunker,
+        chunkers: ChunkerResolver,
         embedder: EmbeddingProvider,
         session_factory: SessionFactory,
         vector_store_factory: VectorStoreFactory,
     ) -> None:
         self._extractor = extractor
-        self._chunker = chunker
+        self._chunkers = chunkers
         self._embedder = embedder
         self._session_factory = session_factory
         self._vector_store_factory = vector_store_factory
 
     async def run(self) -> IngestionReport:
         # Extractors are synchronous (file/network readers); keep them off the event loop.
+        logger.info("extracting documents (large PDFs can take a minute or two)")
+        started = time.monotonic()
         documents = await asyncio.to_thread(lambda: list(self._extractor.extract()))
-        report = IngestionReport()
+        logger.info(
+            "extracted %d documents in %s",
+            len(documents),
+            format_duration(time.monotonic() - started),
+        )
+
+        # Chunk everything first so progress can report against the total chunk count.
+        prepared: list[tuple[ExtractedDocument, list[TextChunk] | DocumentResult]] = []
         for document in documents:
-            report.results.append(await self._ingest_safely(document))
+            try:
+                prepared.append((document, self._chunk(document)))
+            except ValueError as exc:
+                logger.warning("failed to chunk %s: %s", document.source_uri, exc)
+                prepared.append(
+                    (document, DocumentResult(document.source_uri, Outcome.FAILED, str(exc)))
+                )
+        progress = ProgressTracker(
+            sum(len(p) for _, p in prepared if not isinstance(p, DocumentResult))
+        )
+        logger.info("chunked %d documents into %d chunks", len(documents), progress.total)
+
+        report = IngestionReport()
+        run_started = time.monotonic()
+        for document, chunks in prepared:
+            if isinstance(chunks, DocumentResult):
+                report.results.append(chunks)
+            else:
+                report.results.append(await self._ingest_safely(document, chunks, progress))
+        logger.info(
+            "ingestion finished in %s: %s",
+            format_duration(time.monotonic() - run_started),
+            ", ".join(f"{len(report.of(o))} {o.value}" for o in Outcome),
+        )
         return report
 
-    async def _ingest_safely(self, document: ExtractedDocument) -> DocumentResult:
+    def _chunk(self, document: ExtractedDocument) -> list[TextChunk]:
+        chunker = self._chunkers.for_document(document.source_uri)
+        chunks = chunker.chunk(document)
+        log_chunks(document.source_uri, type(chunker).__name__, chunks)
+        return chunks
+
+    async def _ingest_safely(
+        self, document: ExtractedDocument, chunks: list[TextChunk], progress: ProgressTracker
+    ) -> DocumentResult:
         try:
-            return await self.ingest_document(document)
+            return await self.ingest_document(document, chunks, progress)
         except (EmbeddingError, ValueError) as exc:
             logger.warning("failed to ingest %s: %s", document.source_uri, exc)
             return DocumentResult(document.source_uri, Outcome.FAILED, str(exc))
@@ -88,10 +200,11 @@ class IngestionPipeline:
             logger.exception("unexpected error ingesting %s", document.source_uri)
             return DocumentResult(document.source_uri, Outcome.FAILED, "unexpected error")
 
-    async def ingest_document(self, document: ExtractedDocument) -> DocumentResult:
+    async def ingest_document(
+        self, document: ExtractedDocument, chunks: list[TextChunk], progress: ProgressTracker
+    ) -> DocumentResult:
         uri = document.source_uri
         content_hash = hash_content(document.text)
-        chunks = self._chunker.chunk(document.text)
         if not chunks:
             return DocumentResult(uri, Outcome.SKIPPED, "no text content")
 
@@ -103,12 +216,30 @@ class IngestionPipeline:
                 and existing.content_hash == content_hash
                 and existing.status == SourceStatus.ACTIVE.value
             ):
+                logger.info("skipping %s: content unchanged since last ingestion", uri)
+                progress.advance(len(chunks), log=False)
                 return DocumentResult(uri, Outcome.SKIPPED, "unchanged")
 
-            vectors = await self._embedder.embed([c.text for c in chunks])
-            if len(vectors) != len(chunks):
-                raise EmbeddingError(f"expected {len(chunks)} embeddings, got {len(vectors)}")
+            logger.info(
+                "%s %s: embedding %d chunks with %s",
+                "updating" if existing else "adding",
+                uri,
+                len(chunks),
+                self._embedder.model_name,
+            )
+            vectors: list[list[float]] = []
+            for start in range(0, len(chunks), EMBED_BATCH_SIZE):
+                batch = chunks[start : start + EMBED_BATCH_SIZE]
+                batch_vectors = await self._embedder.embed([c.text for c in batch])
+                if len(batch_vectors) != len(batch):
+                    raise EmbeddingError(
+                        f"expected {len(batch)} embeddings, got {len(batch_vectors)}"
+                    )
+                vectors.extend(batch_vectors)
+                progress.advance(len(batch))
 
+            write_started = time.monotonic()
+            logger.info("writing %s to Postgres (%d chunks)", uri, len(chunks))
             vector_store = self._vector_store_factory(session)
             chunk_repo = ChunkRepository(session)
             if existing is None:
@@ -141,23 +272,35 @@ class IngestionPipeline:
                     for chunk_id, chunk in zip(chunk_ids, chunks, strict=True)
                 ]
             )
-            await vector_store.upsert(
-                [
-                    VectorRecord(
-                        chunk_id=chunk_id,
-                        embedding=vector,
-                        source_id=source.id,
-                        source_type=document.source_type,
-                        chunk_index=chunk.index,
-                        metadata={
-                            "source_uri": uri,
-                            "char_start": chunk.char_start,
-                            "char_end": chunk.char_end,
-                        },
-                    )
-                    for chunk_id, chunk, vector in zip(chunk_ids, chunks, vectors, strict=True)
-                ]
-            )
+            logger.info("%s: stored %d chunk rows, storing vectors", uri, len(chunks))
+            records = [
+                VectorRecord(
+                    chunk_id=chunk_id,
+                    embedding=vector,
+                    source_id=source.id,
+                    source_type=document.source_type,
+                    chunk_index=chunk.index,
+                    metadata={
+                        **chunk.metadata,
+                        "source_uri": uri,
+                        "char_start": chunk.char_start,
+                        "char_end": chunk.char_end,
+                    },
+                )
+                for chunk_id, chunk, vector in zip(chunk_ids, chunks, vectors, strict=True)
+            ]
+            for start in range(0, len(records), VECTOR_WRITE_BATCH_SIZE):
+                await vector_store.upsert(records[start : start + VECTOR_WRITE_BATCH_SIZE])
+                stored = min(start + VECTOR_WRITE_BATCH_SIZE, len(records))
+                logger.info("%s: stored vectors %d/%d", uri, stored, len(records))
+            logger.info("%s: committing transaction", uri)
+
+        logger.info(
+            "%s: committed %d chunks (write took %s)",
+            uri,
+            len(chunks),
+            format_duration(time.monotonic() - write_started),
+        )
 
         outcome = Outcome.ADDED if existing is None else Outcome.UPDATED
         return DocumentResult(uri, outcome, f"{len(chunks)} chunks")

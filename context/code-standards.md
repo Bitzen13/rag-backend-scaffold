@@ -46,13 +46,13 @@
 - Enforce API key auth before any read or mutation. Validate `X-API-Key` against `api_keys.key_hash`, reject inactive keys, and never store or log plaintext keys. Compare hashes in constant time.
 - Apply per-key rate limiting on public routes.
 - Internal/admin routes (ingestion, re-sync, key issuance/revocation) are never publicly exposed and require their own protection.
-- Return consistent, predictable response shapes. Errors return `{ "error": string, "code": string }` with appropriate HTTP status codes: 401 invalid/missing key, 400 malformed request (map FastAPI's default 422 validation errors to this), 503 upstream unreachable. An empty retrieval result is a 200 with the "no relevant context" answer, not an error.
+- Return consistent, predictable response shapes. Errors return `{ "error": string, "code": string }` with appropriate HTTP status codes: 401 invalid/missing key, 400 malformed request (map FastAPI's default 422 validation errors to this), 503 upstream unreachable. An empty retrieval result is a normal 200 (the LLM is still called, with an empty context, and no sources are returned), not an error.
 - Keep route handlers thin — push logic into shared modules (retrieval, generation, services).
 
 ## Retrieval & Generation
 
-- The prompt template must constrain the LLM to answer only from retrieved context and include the explicit "no relevant context" fallback. Do not weaken this to make answers look fuller.
-- Apply the similarity threshold from config before building the prompt. If nothing passes, do not call the LLM with an empty context as if it were grounded.
+- The prompt template must let the assistant chat naturally (greetings, small talk, questions about itself) while requiring every factual answer to come only from the retrieved context, and telling it to say it lacks the information rather than answer from its own knowledge. No canned answer strings are hard-coded. Do not weaken the grounding rule to make answers look fuller.
+- Apply the similarity threshold from config before building the prompt. If nothing passes, still call the LLM but with an explicit "no relevant passages were found" context, never a pretend-grounded one, and return no sources.
 - Every answer returns source references (`chunk_id`, `source_uri`, `excerpt`) traceable to stored chunks.
 - Treat retrieved chunk text as untrusted data inside the prompt. Delimit it clearly so document content cannot act as instructions to the model.
 - Wrap LLM, embedding, and vector DB calls with timeouts and bounded retries. Surface persistent failures as 503, not as silent empty answers.

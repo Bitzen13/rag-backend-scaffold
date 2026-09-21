@@ -27,7 +27,7 @@ Beyond the core question-answering loop, the system includes the infrastructure 
 - Re-sync capability that reprocesses only changed or new content
 
 **Chunking**
-- Configurable chunking strategy (fixed-size, overlap, or semantic), controlled via config
+- Chunking strategy chosen manually per document via config (fixed-size with overlap, or document-aware: one chunk per table row plus prose by section)
 - Chunk-level metadata preservation for traceability back to source
 
 **Embedding & Vector Storage**
@@ -36,13 +36,13 @@ Beyond the core question-answering loop, the system includes the infrastructure 
 - Update/removal of vectors tied to re-synced or deleted content
 
 **Retrieval**
-- Similarity search against the vector database
+- Similarity search against the vector database, merged with a typo-tolerant keyword search (character-trigram matching) so exact names and misspellings still find their chunks
 - Configurable retrieval depth and similarity thresholding
 - Optional metadata filtering (source, date range, document type)
 
 **Generation**
 - Prompt construction combining retrieved context with the user's question
-- Prompt template constraining the LLM to answer only from context, with an explicit "no relevant context" fallback
+- Conversational prompt template: greetings and small talk are answered naturally, while factual answers come only from retrieved context (the model says it lacks the information otherwise)
 - Configurable LLM provider/model
 
 **API**
@@ -73,4 +73,4 @@ A new client (e.g., a newly built frontend, or a Slack bot) is issued its own AP
 A developer adjusts chunk size or retrieval count in the config file and re-runs ingestion/testing directly against the API, with no frontend involved at all.
 
 **6. Handling a question with no relevant context**
-Retrieval returns nothing above the similarity threshold; the fallback instruction in the prompt template causes the LLM to state it has no relevant information, rather than fabricating an answer.
+Retrieval returns nothing above the similarity threshold; the LLM is still called with an empty context. A greeting or small talk gets a natural reply; a factual question gets a statement that the information is not in the knowledge base, rather than a fabricated answer.

@@ -10,7 +10,11 @@ from settings import load_settings
 
 VALID_CONFIG: dict[str, Any] = {
     "extraction": {"provider": "filesystem", "path": "data/sample", "extensions": [".md", ".txt"]},
-    "chunking": {"strategy": "fixed_size", "chunk_size": 500, "chunk_overlap": 50},
+    "chunking": {
+        "chunk_size": 500,
+        "chunk_overlap": 50,
+        "documents": {"a.md": "fixed_size", "b.pdf": "document_aware"},
+    },
     "retrieval": {"top_k": 5, "similarity_threshold": 0.75},
     "models": {
         "embedding_provider": "openai",
@@ -60,7 +64,8 @@ def test_valid_config_loads(tmp_path: Path) -> None:
         ({"chunking": {"chunk_size": -1}}, "chunk_size"),
         ({"chunking": {"chunk_size": 0}}, "chunk_size"),
         ({"chunking": {"chunk_overlap": 500}}, "chunk_overlap"),
-        ({"chunking": {"strategy": "sliding"}}, "strategy"),
+        ({"chunking": {"documents": {"a.md": "sliding"}}}, "documents"),
+        ({"chunking": {"strategy": "fixed_size"}}, "strategy"),
         ({"retrieval": {"top_k": 0}}, "top_k"),
         ({"retrieval": {"similarity_threshold": 1.5}}, "similarity_threshold"),
         ({"models": {"llm_provider": "mystery"}}, "llm_provider"),
@@ -113,3 +118,13 @@ def test_secrets_come_from_environment(tmp_path: Path, monkeypatch: pytest.Monke
 def test_config_path_env_var(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CONFIG_PATH", str(write_config(tmp_path, {"retrieval": {"top_k": 9}})))
     assert load_settings(env_file=None).retrieval.top_k == 9
+
+
+def test_fuzzy_retrieval_settings_have_defaults_and_are_validated(tmp_path: Path) -> None:
+    retrieval = load_settings(write_config(tmp_path), env_file=None).retrieval
+    assert (retrieval.fuzzy_top_k, retrieval.fuzzy_min_similarity) == (5, 0.6)
+
+    with pytest.raises(ValidationError, match="fuzzy_min_similarity"):
+        load_settings(
+            write_config(tmp_path, {"retrieval": {"fuzzy_min_similarity": 1.5}}), env_file=None
+        )

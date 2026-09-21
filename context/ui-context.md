@@ -19,5 +19,5 @@ The only human-facing surfaces are for developers and operators:
 Anything a consumer needs to render is carried by the API response shape, not by this repo:
 
 - `POST /api/query` returns `answer` plus `sources` (`chunk_id`, `source_uri`, `excerpt`) so a client can show citations.
-- The "no relevant context" case is a normal 200 response with a fallback answer, so clients can display it like any other answer.
+- The "no relevant context" case is a normal 200 response with a free-text answer and an empty `sources` list, so clients can display it like any other answer.
 - The request/response shape is a versioned contract. Any change must be backward-compatible or versioned (see `architecture-context.md`).

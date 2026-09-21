@@ -64,7 +64,16 @@ class Source(Base):
 
 class Chunk(Base):
     __tablename__ = "chunks"
-    __table_args__ = (UniqueConstraint("source_id", "chunk_index", name="uq_chunks_source_index"),)
+    __table_args__ = (
+        UniqueConstraint("source_id", "chunk_index", name="uq_chunks_source_index"),
+        # Trigram index: typo-tolerant word matching against chunk text (see fuzzy_search).
+        Index(
+            "ix_chunks_text_trgm",
+            "text",
+            postgresql_using="gin",
+            postgresql_ops={"text": "gin_trgm_ops"},
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     source_id: Mapped[uuid.UUID] = mapped_column(

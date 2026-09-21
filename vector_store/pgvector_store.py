@@ -8,6 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db.models import EMBEDDING_DIMENSIONS, ChunkVector
 from vector_store.base import VectorFilter, VectorMatch, VectorRecord
 
+# asyncpg allows at most 32767 bind parameters per statement; each record binds 6.
+UPSERT_BATCH_SIZE = 1000
+
 
 class PgVectorStore:
     """VectorStore backed by the chunk_vectors table.
@@ -28,10 +31,12 @@ class PgVectorStore:
             )
 
     async def upsert(self, records: Sequence[VectorRecord]) -> None:
-        if not records:
-            return
         for record in records:
             self._check_dimensions(record.embedding)
+        for start in range(0, len(records), UPSERT_BATCH_SIZE):
+            await self._upsert_batch(records[start : start + UPSERT_BATCH_SIZE])
+
+    async def _upsert_batch(self, records: Sequence[VectorRecord]) -> None:
         stmt = insert(ChunkVector).values(
             [
                 {

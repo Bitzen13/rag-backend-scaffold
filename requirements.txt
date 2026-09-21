@@ -8,3 +8,5 @@ asyncpg>=0.29,<1
 alembic>=1.13,<2
 pgvector>=0.3,<1
 openai>=1.40,<3
+anthropic>=0.40,<1
+pdfplumber>=0.11,<1
