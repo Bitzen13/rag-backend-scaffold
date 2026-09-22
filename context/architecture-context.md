@@ -152,19 +152,37 @@ vector_db:
 auth:
   api_key_header: X-API-Key
 
+api:
+  max_question_chars: 2000             # rejected with 400 before any embedding or LLM call
+
 Secrets (ANTHROPIC_API_KEY, OPENAI_API_KEY, DATABASE_URL, VECTOR_DB_URL) come exclusively from environment variables.
 
 Validation at load time, so a bad value fails loudly rather than producing bad chunks: every effective `chunk_overlap` is below its `chunk_size`, every `chunk_size` is within the hard cap, the hard cap is within the embedding model's input limit, `prose_splitting` is only set on `document_aware`, and an embedding model whose input limit is not known requires `max_chunk_tokens` to be set explicitly.
 
 ## 5. API Design
 
-**POST /api/query**
-- **Auth:** X-API-Key header, validated against api_keys.key_hash
-- **Request:** { "question": "string", "filters": { "source_type": "optional" } }
+**POST /api/query** (`api/query.py`; dependencies in `api/dependencies.py`)
+- **Auth:** the header named by `auth.api_key_header` (default `X-API-Key`), looked up by SHA-256 against `api_keys.key_hash` and rejected unless `is_active`. It is a FastAPI dependency, so it resolves *before* the body is validated: a request with no key never learns what the payload should look like, and never reaches retrieval.
+- **Request:** { "question": "string", "filters": { "source_type": "optional" } } — `question` is trimmed, must not be blank, and must be at most `api.max_question_chars`; an unknown field is rejected rather than ignored.
 - **Response:** { "answer": "string", "sources": [{ "chunk_id": "uuid", "source_uri": "string", "excerpt": "string" }] }
-- **Errors:** 401 invalid/missing key, 400 malformed request, 503 upstream (LLM/vector DB) unreachable, an empty retrieval is not an error: the LLM is still called, with an empty context, and the response is a normal 200 (with no sources)
+- **Errors:** every failure is `{ "error": string, "code": string }` (`api/errors.py`). `code` is the stable part; renaming one is a breaking change.
+
+| status | code | when |
+|---|---|---|
+| 401 | `missing_api_key` | the API-key header is absent or blank |
+| 401 | `invalid_api_key` | the key is unknown **or** revoked — one answer for both, so the caller cannot learn that a key once existed |
+| 400 | `invalid_request` | malformed body, unknown field, blank question, or a question over `api.max_question_chars` (FastAPI's own 422 is mapped here) |
+| 503 | `upstream_unavailable` | the embedding provider, the LLM or the database failed; the provider's message is logged, never returned |
+
+An empty retrieval is **not** an error: the LLM is still called, with an empty context, and the response is a normal 200 with an empty `sources` list.
 
 This request/response shape is the contract the frontend template (and any other consumer) is built against — changes to it must be versioned or made backward-compatible, since consumers are now maintained in separate repos.
+
+**Key management:** `scripts/create_api_key.py --label ...` issues a key and prints it exactly once (only its hash is stored, so it cannot be recovered), `--list` shows every key and its state, and `--revoke <id>` sets `is_active` false, which takes effect on the next request.
+
+**OpenAPI:** the configured API-key header is declared as a security scheme, so `/docs` can authorise; every error status names `ErrorResponse`; and FastAPI's automatic 422 is stripped from the document, since this API answers 400 instead.
+
+**Start-up:** a lifespan opens the database engine and the provider clients once (`api.dependencies.build_resources`) and disposes of them on shutdown; `services/factory.build_query_service` is the single wiring of the query path, shared with `scripts/ask.py`.
 
 **Internal/admin (not public):** trigger ingestion, trigger re-sync, issue/revoke API keys.
 
@@ -190,10 +208,10 @@ Documents are then processed one at a time and streamed: nothing beyond a single
 
 **Measurement.** `scripts/ingest.py --dry-run` reports chunk quality per document and for the corpus (size distribution, oversized, empty, undersized, duplicates, chunks that start mid-sentence or end mid-word, chunks that are mostly a URL), writes every chunk to `chunked/` for inspection, and can record the report as JSON; it needs no database and no API keys. `scripts/evaluate.py` measures retrieval itself — recall@k and MRR over `evaluation/questions.yaml`, through the same `Retriever` the API uses — and can record a baseline and fail on a regression against it. `--check-dataset` tells a typo in the evaluation set apart from a retrieval failure by re-chunking the corpus and reporting the cases no chunk can satisfy.
 
-**Query:** (Phase 4 implements everything after the API layer: `services/query_service.py` → `retrieval/retriever.py` + `generation/`.) Client → /api/query (key validated) → question embedded → vector similarity search (+ filters) **and** typo-tolerant keyword search → results merged (reciprocal rank fusion) → top-K chunks fetched from Postgres → prompt assembled → LLM call → answer + citations returned
+**Query:** Client → /api/query (key validated) → question embedded → vector similarity search (+ filters) **and** typo-tolerant keyword search → results merged (reciprocal rank fusion) → top-K chunks fetched from Postgres → prompt assembled → LLM call → answer + citations returned
 
 ## 7. Security Considerations
-- API keys stored hashed, revoked via is_active rather than deleted
+- API keys are 32 random bytes behind a `rag_` prefix, stored as SHA-256 only and never in plaintext; verified by hash lookup plus `hmac.compare_digest`, and revoked via `is_active` rather than deleted, so a key that was used can still be accounted for
 - Per-key rate limiting
 - All credentials via environment variables only
 - Input validation/size limits on /api/query before reaching the LLM call

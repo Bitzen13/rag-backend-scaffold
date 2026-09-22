@@ -72,3 +72,7 @@ vector_db:
 
 auth:
   api_key_header: X-API-Key
+
+api:
+  # Rejected with 400 before the question reaches the embedding or LLM call.
+  max_question_chars: 2000

@@ -71,14 +71,27 @@
 
 12. **Issue an API key for your frontend/consumer**
     python scripts/create_api_key.py --label "my-frontend"
-    Save the generated key — you'll need it in the frontend's .env.
+    Save the generated key: only its hash is stored, so this is the only time it can be shown, and
+    you'll need it in the consumer's .env. If it is lost, revoke it and issue another.
+    python scripts/create_api_key.py --list                 (every key, with its state)
+    python scripts/create_api_key.py --revoke <id>          (deactivate one; --yes skips the prompt)
+    Revocation takes effect on the next request, and the row is kept rather than deleted.
 
 13. **Run the server**
     uvicorn main:app --reload
+    Interactive docs at http://localhost:8000/docs — paste a key into "Authorize" and try the route
+    from the browser. Consider protecting or disabling /docs and /redoc in production.
 
 14. **Test it**
     curl -X POST http://localhost:8000/api/query \
       -H "X-API-Key: <your-key>" \
       -H "Content-Type: application/json" \
       -d '{"question": "What is this about?"}'
-    You should get back an answer with source references.
+    You get back `{"answer": ..., "sources": [...]}`, one source per retrieved chunk (`chunk_id`,
+    `source_uri`, `excerpt`). Narrow the search with
+    `{"question": "...", "filters": {"source_type": "file"}}`.
+    Ask something your documents do not cover and you still get a 200, with an answer saying so and
+    an empty `sources` list — that is not an error. Errors are always `{"error": ..., "code": ...}`:
+    401 `missing_api_key` or `invalid_api_key`, 400 `invalid_request` (malformed body, blank
+    question, or one longer than `api.max_question_chars`), 503 `upstream_unavailable` when the LLM,
+    embedding provider or database cannot be reached.

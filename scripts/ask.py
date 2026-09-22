@@ -14,44 +14,25 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from db.repositories.chunks import ChunkRepository
 from db.session import create_engine, create_session_factory, database_url_from_settings
 from embedding.base import EmbeddingError
 from embedding.factory import build_embedding_provider
 from generation.base import LLMError
 from generation.factory import build_llm_provider
-from retrieval.retriever import Retriever
-from services.query_service import QueryService
+from services.factory import build_query_service
 from settings import get_settings
 from vector_store.base import VectorFilter
-from vector_store.pgvector_store import PgVectorStore
 
 
 async def main(question: str, source_type: str | None) -> None:
     settings = get_settings()
-    if settings.vector_db.provider != "pgvector":
-        raise SystemExit(f"vector_db.provider {settings.vector_db.provider!r} is not supported yet")
-
     embedder = build_embedding_provider(settings)
     llm = build_llm_provider(settings)
     engine = create_engine(database_url_from_settings(settings))
     try:
         async with create_session_factory(engine)() as session:
-            service = QueryService(
-                retriever=Retriever(
-                    embedder=embedder,
-                    vector_store=PgVectorStore(session),
-                    chunks=ChunkRepository(session),
-                    top_k=settings.retrieval.top_k,
-                    similarity_threshold=settings.retrieval.similarity_threshold,
-                    fuzzy_top_k=settings.retrieval.fuzzy_top_k,
-                    fuzzy_min_similarity=settings.retrieval.fuzzy_min_similarity,
-                    fuzzy_max_matches_per_phrase=settings.retrieval.fuzzy_max_matches_per_phrase,
-                    fuzzy_min_relative_evidence=settings.retrieval.fuzzy_min_relative_evidence,
-                ),
-                llm=llm,
-                excerpt_max_chars=settings.retrieval.excerpt_max_chars,
-            )
+            # The same wiring /api/query uses, so the two answer a question identically.
+            service = build_query_service(settings, session, embedder=embedder, llm=llm)
             result = await service.answer(question, VectorFilter(source_type=source_type))
     finally:
         await engine.dispose()

@@ -174,6 +174,12 @@ class AuthConfig(_Section):
     api_key_header: str = Field(min_length=1)
 
 
+class ApiConfig(_Section):
+    """Limits enforced at the public API boundary, before any embedding or LLM call is made."""
+
+    max_question_chars: int = Field(default=2000, ge=1)
+
+
 class Secrets(BaseSettings):
     """Secrets read from environment variables (or a local .env file). Never from config.yaml."""
 
@@ -192,6 +198,7 @@ class Settings(_Section):
     models: ModelsConfig
     vector_db: VectorDbConfig
     auth: AuthConfig
+    api: ApiConfig = Field(default_factory=ApiConfig)
     secrets: Secrets
 
     @property

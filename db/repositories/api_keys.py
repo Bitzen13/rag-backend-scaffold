@@ -24,6 +24,11 @@ class ApiKeyRepository:
         result = await self._session.execute(select(ApiKey).where(ApiKey.key_hash == key_hash))
         return result.scalar_one_or_none()
 
+    async def list_all(self) -> list[ApiKey]:
+        """Every key, active or revoked, oldest first. For the key-management CLI."""
+        result = await self._session.execute(select(ApiKey).order_by(ApiKey.created_at))
+        return list(result.scalars())
+
     async def revoke(self, api_key_id: uuid.UUID) -> bool:
         """Deactivate a key (rows are never deleted). Returns False if no such key exists."""
         result = await self._session.execute(

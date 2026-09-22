@@ -1,6 +1,6 @@
 # Project Phases
 
-**Current phase: Phase 7 — API & Authentication** (Phases 1–6: COMPLETE)
+**Current phase: Phase 8 — Hardening & Operations** (Phases 1–7: COMPLETE)
 
 Phases are ordered by dependency: each builds on the previous one, and the first working end-to-end path (ingest, then query) already exists as scripts (`scripts/ingest.py`, `scripts/ask.py`); the public API arrives in Phase 7. Do not start a phase until the previous phase's "Done when" criteria are met. Update the current phase marker above as work progresses.
 
@@ -165,18 +165,73 @@ chunking settings in config re-chunks it on the next run; deleting a source file
 `deleted` and removes its chunks and vectors; and bumping a reader's recorded version re-extracts
 the documents that reader handles.
 
-## Phase 7 — API & Authentication
+## Phase 7 — API & Authentication — COMPLETE
 
 **Goal:** The public integration surface, testable with curl.
 
-- `POST /api/query` with Pydantic request/response models matching `architecture-context.md`
-- API key auth via `X-API-Key`, checked against hashed keys and `is_active`
-- `scripts/create_api_key.py` (key shown once, stored hashed) and revocation
-- Input validation and size limits on `question`
-- Consistent `{ error, code }` error responses: 401, 400, 503, and 200 (with an empty `sources` list) when retrieval finds nothing
-- Accurate OpenAPI docs
+### What was built
 
-**Done when:** The curl example in `get-started.md` works end to end, and tests cover missing key, revoked key, malformed request, and the empty-retrieval path.
+**`POST /api/query`** (`api/query.py`), with the request and response models from
+`architecture-context.md` §5. `question` is trimmed and must not be blank, `filters.source_type`
+narrows retrieval, and an unknown field is rejected rather than ignored — a typo in a payload is an
+error, not a filter that silently did nothing. The handler stays thin: the wiring moved to
+`services/factory.build_query_service`, which the API and `scripts/ask.py` now share, so the two
+cannot come to answer the same question differently.
+
+**API-key authentication** (`services/api_keys.py`, `api/dependencies.py`). A key is 32 random
+bytes behind a `rag_` prefix; only its SHA-256 is stored, the lookup is by hash, and the final
+comparison is `hmac.compare_digest`. A key is high-entropy, so a fast hash is the right one: there
+is no low-entropy secret to brute-force, and a slow KDF would be paid on every request instead of
+once. An unknown key and a revoked one get the identical 401, so a caller cannot use the response
+to learn that a key once existed. Authentication is a dependency, so it resolves before the body is
+validated: a request with no key learns nothing about the payload shape and never reaches retrieval.
+
+**Key management** (`scripts/create_api_key.py`): `--label` issues a key and prints it exactly once,
+`--list` shows every key with its state, `--revoke <id>` deactivates one after confirmation
+(`--yes` skips the prompt, and an unreadable answer counts as "no"). Revocation is immediate — the
+next request with that key is a 401.
+
+**One error shape** (`api/errors.py`): every failure is `{"error", "code"}`. FastAPI's own 422 is
+mapped to 400 `invalid_request`; a missing or blank key is 401 `missing_api_key` and an unknown or
+revoked one 401 `invalid_api_key`; an `EmbeddingError`, `LLMError` or `SQLAlchemyError` is 503
+`upstream_unavailable`, with the provider's own message logged rather than returned to the caller.
+404 and 405 come back in the same shape. An empty retrieval is not an error: the LLM is still
+called with an empty context and the answer is a normal 200 with `sources: []`.
+
+**Input limits**: `api.max_question_chars` (default 2000) is configuration rather than a constant in
+the route, and is enforced before the question reaches the embedding or LLM call.
+
+**Start-up and shutdown**: a lifespan opens the database engine and the provider clients once and
+disposes of them on shutdown, instead of rebuilding them per request. Everything else a route needs
+arrives through `Depends`, which is what lets the tests replace the database and both providers.
+
+**Accurate OpenAPI**: the configured API-key header is declared as a security scheme, so `/docs`
+has a working authorise button; each error status names `ErrorResponse`; and the automatic 422 is
+removed from the document, because a status code the API never returns is a branch a generated
+client can never run.
+
+### Verified end to end
+
+Against the ingested sample corpus (11 sources, 5,928 chunks), with a real key issued by the CLI:
+the `get-started.md` curl example returns 200; "What is the largest known star?" comes back grounded
+in `List_of_largest_stars.pdf` with its citations; a missing key, an unknown key, a payload typo, a
+blank question and a 2,001-character question return 401 / 401 / 400 / 400 / 400 in the standard
+shape; and the same key returns 401 immediately after `--revoke`.
+
+**Testing.** 392 tests pass (was 352). The 40 new ones need no database and call no provider: the
+grounded answer with its sources, question trimming, filters reaching the retriever, the
+empty-retrieval 200, missing / blank / unknown / revoked keys, authentication before body
+validation, nine malformed payloads, the configured length cap, each upstream failure as a 503 that
+leaks no provider detail, a database failure during authentication as a 503 rather than a 401, 404
+and 405 in the same shape, and the OpenAPI document's responses, security scheme and absent 422.
+
+**Done when (met):** the curl example in `get-started.md` works end to end, and tests cover a
+missing key, a revoked key, a malformed request and the empty-retrieval path.
+
+**Left to Phase 8 on purpose:** per-key rate limiting, `query_logs` and `last_used_at` updates
+(`ApiKeyRepository.touch_last_used` stays unused until then, so `--list` shows every key as never
+used), the internal/admin paths, and timeouts and bounded retries beyond those the provider clients
+already apply.
 
 ## Phase 8 — Hardening & Operations
 
