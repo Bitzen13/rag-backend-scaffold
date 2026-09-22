@@ -19,6 +19,7 @@ from embedding.base import EmbeddingError
 from embedding.factory import build_embedding_provider
 from generation.base import LLMError
 from generation.factory import build_llm_provider
+from observability import configure_logging, install_handler
 from services.factory import build_query_service
 from settings import get_settings
 from vector_store.base import VectorFilter
@@ -26,6 +27,7 @@ from vector_store.base import VectorFilter
 
 async def main(question: str, source_type: str | None) -> None:
     settings = get_settings()
+    configure_logging(settings)
     embedder = build_embedding_provider(settings)
     llm = build_llm_provider(settings)
     engine = create_engine(database_url_from_settings(settings))
@@ -48,7 +50,7 @@ if __name__ == "__main__":
         "--verbose", action="store_true", help="log retrieved chunks, scores, and the LLM prompt"
     )
     args = parser.parse_args()
-    logging.basicConfig(level=logging.WARNING, format="%(message)s", stream=sys.stderr)
+    install_handler(level=logging.WARNING, text_format="%(message)s", stream=sys.stderr)
     if args.verbose:
         for name in ("retrieval", "services"):
             logging.getLogger(name).setLevel(logging.DEBUG)

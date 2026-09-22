@@ -5,6 +5,7 @@ here is the hashing and the active/revoked decision that authentication turns on
 """
 
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 
@@ -17,27 +18,56 @@ from services.api_keys import (
 )
 
 
+def new_row(key_hash: str, label: str, active: bool = True) -> ApiKey:
+    """A row as the database would return it: `created_at` is a server default in Postgres."""
+    return ApiKey(
+        id=uuid.uuid4(),
+        key_hash=key_hash,
+        label=label,
+        is_active=active,
+        created_at=datetime.now(UTC),
+    )
+
+
 class FakeApiKeyStore:
-    """In-memory stand-in for ApiKeyRepository, keyed by hash exactly as the real one is."""
+    """In-memory stand-in for ApiKeyRepository, keyed by hash exactly as the real one is.
+
+    It covers the whole repository surface, not just authentication, because the internal admin
+    routes list and revoke through the same contract (services/admin.ApiKeyAdminStore).
+    """
 
     def __init__(self) -> None:
         self.rows: dict[str, ApiKey] = {}
 
     async def create(self, *, key_hash: str, label: str) -> ApiKey:
-        api_key = ApiKey(id=uuid.uuid4(), key_hash=key_hash, label=label, is_active=True)
+        api_key = new_row(key_hash, label)
         self.rows[key_hash] = api_key
         return api_key
 
     async def get_by_hash(self, key_hash: str) -> ApiKey | None:
         return self.rows.get(key_hash)
 
+    async def list_all(self) -> list[ApiKey]:
+        return sorted(self.rows.values(), key=lambda row: row.created_at)
+
+    async def revoke(self, api_key_id: uuid.UUID) -> bool:
+        for row in self.rows.values():
+            if row.id == api_key_id:
+                row.is_active = False
+                return True
+        return False
+
+    async def touch_last_used(self, api_key_id: uuid.UUID) -> None:
+        """Also a KeyUsageStore: the API records every key's last use (services/usage.py)."""
+        for row in self.rows.values():
+            if row.id == api_key_id:
+                row.last_used_at = datetime.now(UTC)
+
 
 def add_key(store: FakeApiKeyStore, *, label: str = "consumer", active: bool = True) -> str:
     """Store a key and return its plaintext."""
     key = generate_api_key()
-    store.rows[hash_api_key(key)] = ApiKey(
-        id=uuid.uuid4(), key_hash=hash_api_key(key), label=label, is_active=active
-    )
+    store.rows[hash_api_key(key)] = new_row(hash_api_key(key), label, active)
     return key
 
 

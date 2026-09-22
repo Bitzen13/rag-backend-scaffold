@@ -115,10 +115,11 @@ python scripts/evaluate.py --baseline evaluation/baselines/retrieval.json   # no
 `--dry-run` also writes every chunk to `chunked/<source_uri>.chunks.txt`, which is the fastest
 way to see what a setting actually did.
 
-Both baselines for the sample corpus are already committed, so a change can be checked against
-them immediately: chunk quality in `evaluation/baselines/chunk-qa.json` (5,767 chunks, no
-defects) and retrieval in `evaluation/baselines/retrieval.json` (recall@1 0.680, recall@3 0.960,
-recall@5 1.000, MRR 0.828). Re-record them for your own corpus.
+**No baselines ship with this template**, and that is deliberate: a baseline recorded on
+somebody else's documents would make the regression gate pass or fail for reasons that have
+nothing to do with your corpus, which is worse than having no gate. Record both once your real
+documents are ingested and `evaluation/questions.yaml` holds your own questions, then commit
+them — `evaluation/baselines/README.md` has the commands.
 
 ### Reading the quality report
 
@@ -136,9 +137,9 @@ recall@5 1.000, MRR 0.828). Re-record them for your own corpus.
 
 ## What is deliberately not implemented
 
-The phase plan lists three further ideas, each gated on the harness showing a gain. None has been
-measured, so none is implemented — a retrieval feature with a cost and no measured benefit is
-worse than its absence:
+Three further ideas, each gated on the harness showing a gain — `design-decisions.md` records them
+under *Considered and not adopted*. None has been measured, so none is implemented: a retrieval
+feature with a cost and no measured benefit is worse than its absence:
 
 - **`semantic` prose splitting** (embed sentences, cut where neighbouring similarity drops). It
   needs an embedding call per sentence at ingestion time. `chunking/prose.py` defines a

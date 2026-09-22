@@ -132,7 +132,11 @@ class PdfConfig(_Section):
 
 
 class ExtractionConfig(_Section):
-    provider: Literal["filesystem"]
+    # `filesystem` is the provider the shared codebase ships. A client whose data lives somewhere
+    # else registers its own extractor under a name of its choosing in its customisation module,
+    # so this cannot be a closed Literal; `extraction/factory.py` rejects an unknown name while
+    # the extractor is built, naming the ones that are available.
+    provider: str = Field(min_length=1)
     path: Path
     # Which files are picked up. The reader for each one is chosen by extension (see
     # extraction/readers/registry.py); an extension with no reader is read as plain text.
@@ -159,25 +163,123 @@ class RetrievalConfig(_Section):
 
 
 class ModelsConfig(_Section):
-    embedding_provider: Literal["openai", "sentence_transformers"]
+    """Provider and model choices, and the bounds on every call made to them.
+
+    Each choice lists only what is implemented, so a provider that cannot take effect is a
+    load-time error naming the alternatives rather than a RuntimeError on the first request. The
+    interfaces the unlisted ones would sit behind already exist (`embedding/base.py`,
+    `vector_store/base.py`); adding one is a new implementation and a new name here.
+
+    Timeouts and retry counts are configuration rather than constants in the provider modules:
+    what a caller is willing to wait for is a deployment decision, and the same code serves
+    clients whose corpora and latency budgets differ. Retries are bounded, and a request that
+    exhausts them is surfaced as a 503 rather than retried forever.
+    """
+
+    embedding_provider: Literal["openai"]
     embedding_model: str = Field(min_length=1)
     llm_provider: Literal["anthropic", "openai"]
     llm_model: str = Field(min_length=1)
     llm_max_tokens: int = Field(default=1024, ge=1)
+    llm_timeout_seconds: float = Field(default=60.0, gt=0)
+    llm_max_retries: int = Field(default=3, ge=0)  # 0 = try once, never retry
+    embedding_timeout_seconds: float = Field(default=30.0, gt=0)
+    embedding_max_retries: int = Field(default=3, ge=0)
+
+
+class DatabaseConfig(_Section):
+    """Bounds on database and vector-store calls.
+
+    Both run through Postgres, so one statement timeout covers the vector search, the keyword
+    search and every repository read. Without it a query that never returns holds a request (and
+    a worker) open indefinitely; with it the driver raises, and the API answers 503 like any
+    other upstream failure. Statements are deliberately not retried inside a request: a retry
+    that re-runs a write would be worse than the failure it is hiding.
+    """
+
+    statement_timeout_seconds: float = Field(default=30.0, gt=0)
+    connect_timeout_seconds: float = Field(default=10.0, gt=0)
+
+
+class LoggingConfig(_Section):
+    """How the application logs. `json` is the production choice: one object per line, so a log
+    shipper can index the fields instead of parsing a message.
+
+    Whatever the format, values that look like a secret are redacted before a record is emitted
+    (see `observability.py`), so this setting cannot be what leaks one.
+    """
+
+    level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+    format: Literal["text", "json"] = "text"
 
 
 class VectorDbConfig(_Section):
-    provider: Literal["pgvector", "pinecone", "qdrant", "weaviate"]
+    """Only `pgvector` is implemented; see ModelsConfig for why the list is not aspirational.
+
+    The column width is fixed by a migration, so a vector store with a different embedding size
+    is a migration as well as an implementation (architecture-context.md §3.2).
+    """
+
+    provider: Literal["pgvector"]
 
 
 class AuthConfig(_Section):
     api_key_header: str = Field(min_length=1)
 
 
+class CorsConfig(_Section):
+    """Browser origins allowed to call this API directly.
+
+    Empty by default, and the middleware is not installed at all when it is empty. A consumer
+    frontend calls this API from its own server, where CORS does not apply and where an API key
+    can be held safely; a browser calling here directly would have to hold the key itself, which
+    it must never do. So an entry here is a deliberate exception, not setup — see
+    architecture-context.md §7.
+    """
+
+    allowed_origins: tuple[str, ...] = ()
+    allow_credentials: bool = False  # nothing here uses cookies; a key travels in a header
+
+    @model_validator(mode="after")
+    def _origins_are_absolute_and_not_wildcards(self) -> Self:
+        for origin in self.allowed_origins:
+            if origin == "*":
+                raise ValueError(
+                    "api.cors.allowed_origins must not be '*': this API is authenticated, so "
+                    "every browser origin allowed here is one that could be made to carry a key"
+                )
+            if not origin.startswith(("http://", "https://")):
+                raise ValueError(
+                    f"origin {origin!r} must include a scheme, e.g. https://app.example.com"
+                )
+        return self
+
+
+class RateLimitConfig(_Section):
+    """Per-key request limiting on the public API.
+
+    The window is fixed rather than sliding, and the count is kept in Postgres rather than in the
+    process. In Postgres because production runs several Uvicorn workers: a counter in memory
+    would give each worker its own allowance, so the effective limit would be the configured one
+    times the number of workers — a limit that silently is not the limit. Fixed because a sliding
+    window costs a row per request; the cost of a fixed window is that a caller can spend two
+    windows' worth of requests either side of a boundary, which is the accepted trade.
+    """
+
+    requests: int = Field(default=60, ge=0)  # per window, per key; 0 turns limiting off
+    window_seconds: int = Field(default=60, ge=1)
+
+
 class ApiConfig(_Section):
     """Limits enforced at the public API boundary, before any embedding or LLM call is made."""
 
     max_question_chars: int = Field(default=2000, ge=1)
+    rate_limit: RateLimitConfig = Field(default_factory=RateLimitConfig)
+    cors: CorsConfig = Field(default_factory=CorsConfig)
+    # Questions and answers are user data. Logging them is how a deployment learns what its
+    # consumers ask; turning it off is how a deployment holding sensitive questions stays that
+    # way. Either way `api_keys.last_used_at` is still recorded, so a key's use is accountable.
+    log_queries: bool = True
 
 
 class Secrets(BaseSettings):
@@ -189,9 +291,16 @@ class Secrets(BaseSettings):
     openai_api_key: SecretStr | None = None
     database_url: SecretStr | None = None
     vector_db_url: SecretStr | None = None
+    # Protects the internal/admin routes. Unset means they are not mounted at all, which is the
+    # default: an operations surface nobody configured should not be reachable.
+    admin_api_token: SecretStr | None = None
 
 
 class Settings(_Section):
+    # The client-specific module this deployment runs with, if any: extra readers and extractors
+    # behind the Protocols the pipeline already defines, so N deployments stay one codebase
+    # (customisations/README.md). Loaded and reported at start-up.
+    customisation: str | None = None
     extraction: ExtractionConfig
     chunking: ChunkingConfig
     retrieval: RetrievalConfig
@@ -199,6 +308,8 @@ class Settings(_Section):
     vector_db: VectorDbConfig
     auth: AuthConfig
     api: ApiConfig = Field(default_factory=ApiConfig)
+    database: DatabaseConfig = Field(default_factory=DatabaseConfig)
+    logging: LoggingConfig = Field(default_factory=LoggingConfig)
     secrets: Secrets
 
     @property

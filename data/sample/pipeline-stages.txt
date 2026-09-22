@@ -15,3 +15,9 @@ with similar meaning end up close together in vector space.
 
 Vector storage keeps the vectors and their metadata so that similar chunks can be found quickly.
 The default implementation uses pgvector inside Postgres.
+
+Retrieval finds the chunks most relevant to a question. It combines vector similarity search with a
+typo-tolerant keyword search, so a misspelled name still matches, and merges the two ranked lists.
+
+Generation builds a prompt from the retrieved chunks and the question, then calls the language
+model. Retrieved text is treated as untrusted data, and the model is told to answer only from it.

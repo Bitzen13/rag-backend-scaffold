@@ -98,7 +98,7 @@ def test_pdf_options_come_from_config() -> None:
     config = ExtractionConfig.model_validate(
         {
             "provider": "filesystem",
-            "path": "data/sample",
+            "path": "documents",
             "pdf": {
                 "strip_patterns": [r"\[\d+\]"],
                 "skip_sections": ["References"],

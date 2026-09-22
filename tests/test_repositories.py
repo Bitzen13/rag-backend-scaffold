@@ -1,13 +1,25 @@
 import uuid
+from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import delete, func, insert, select
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import Chunk, SourceStatus
+from db.models import (
+    ApiKey,
+    ApiKeyRateLimit,
+    Chunk,
+    IngestionJob,
+    JobState,
+    QueryLog,
+    SourceStatus,
+)
 from db.repositories.api_keys import ApiKeyRepository
 from db.repositories.chunks import ChunkRepository, NewChunk
+from db.repositories.jobs import IngestionJobRepository
+from db.repositories.query_logs import QueryLogRepository
+from db.repositories.rate_limits import RateLimitRepository
 from db.repositories.sources import SourceRepository
 
 
@@ -176,3 +188,165 @@ async def test_api_key_hash_is_unique(session: AsyncSession) -> None:
     await repo.create(key_hash="same", label="a")
     with pytest.raises(IntegrityError):
         await repo.create(key_hash="same", label="b")
+
+
+# --- rate limit counters ------------------------------------------------------------------------
+
+
+async def a_key(session: AsyncSession, label: str = "consumer") -> uuid.UUID:
+    key = await ApiKeyRepository(session).create(key_hash=f"hash-{uuid.uuid4()}", label=label)
+    return key.id
+
+
+async def test_counting_a_request_starts_at_one_and_increments(session: AsyncSession) -> None:
+    repo = RateLimitRepository(session)
+    key_id = await a_key(session)
+    window = datetime(2026, 9, 21, 12, 0, tzinfo=UTC)
+
+    counts = [await repo.count_request(key_id, window) for _ in range(3)]
+
+    assert counts == [1, 2, 3]
+
+
+async def test_the_increment_is_one_statement_so_workers_cannot_both_read_the_same_value(
+    session: AsyncSession,
+) -> None:
+    """The count is returned by the upsert itself; nothing reads before it writes."""
+    repo = RateLimitRepository(session)
+    key_id = await a_key(session)
+    window = datetime(2026, 9, 21, 12, 0, tzinfo=UTC)
+    await repo.count_request(key_id, window)
+
+    stored = await session.scalar(
+        select(ApiKeyRateLimit.request_count).where(
+            ApiKeyRateLimit.api_key_id == key_id, ApiKeyRateLimit.window_start == window
+        )
+    )
+
+    assert stored == 1
+
+
+async def test_windows_and_keys_are_counted_separately(session: AsyncSession) -> None:
+    repo = RateLimitRepository(session)
+    first, second = await a_key(session, "a"), await a_key(session, "b")
+    window = datetime(2026, 9, 21, 12, 0, tzinfo=UTC)
+    later = datetime(2026, 9, 21, 12, 1, tzinfo=UTC)
+
+    await repo.count_request(first, window)
+    await repo.count_request(first, window)
+
+    assert await repo.count_request(first, later) == 1
+    assert await repo.count_request(second, window) == 1
+
+
+async def test_purging_removes_only_this_key_s_finished_windows(session: AsyncSession) -> None:
+    repo = RateLimitRepository(session)
+    mine, theirs = await a_key(session, "mine"), await a_key(session, "theirs")
+    old = datetime(2026, 9, 21, 12, 0, tzinfo=UTC)
+    current = datetime(2026, 9, 21, 12, 1, tzinfo=UTC)
+    for key_id in (mine, theirs):
+        await repo.count_request(key_id, old)
+        await repo.count_request(key_id, current)
+
+    removed = await repo.purge_before(mine, current)
+
+    assert removed == 1
+    assert await repo.count_request(mine, current) == 2  # the open window survived
+    assert await repo.count_request(theirs, old) == 2  # the other key is untouched
+
+
+async def test_deleting_a_key_takes_its_counters_with_it(session: AsyncSession) -> None:
+    repo = RateLimitRepository(session)
+    key_id = await a_key(session)
+    await repo.count_request(key_id, datetime(2026, 9, 21, 12, 0, tzinfo=UTC))
+
+    await session.execute(delete(ApiKey).where(ApiKey.id == key_id))
+    await session.flush()
+
+    remaining = await session.scalar(
+        select(func.count())
+        .select_from(ApiKeyRateLimit)
+        .where(ApiKeyRateLimit.api_key_id == key_id)
+    )
+    assert remaining == 0
+
+
+# --- query logs ---------------------------------------------------------------------------------
+
+
+async def test_a_query_log_records_the_question_answer_and_chunks(session: AsyncSession) -> None:
+    key_id = await a_key(session)
+    chunk_ids = [uuid.uuid4(), uuid.uuid4()]
+
+    row = await QueryLogRepository(session).record(
+        api_key_id=key_id,
+        question="Why is the sky blue?",
+        answer="Rayleigh scattering.",
+        retrieved_chunk_ids=chunk_ids,
+    )
+
+    stored = await session.get(QueryLog, row.id)
+    assert stored is not None
+    assert stored.question == "Why is the sky blue?"
+    assert stored.answer == "Rayleigh scattering."
+    assert stored.retrieved_chunk_ids == chunk_ids
+    assert stored.created_at is not None
+
+
+async def test_a_query_log_can_record_that_nothing_was_retrieved(session: AsyncSession) -> None:
+    key_id = await a_key(session)
+
+    row = await QueryLogRepository(session).record(
+        api_key_id=key_id,
+        question="off topic",
+        answer="not in my knowledge base",
+        retrieved_chunk_ids=[],
+    )
+
+    assert row.retrieved_chunk_ids == []
+
+
+# --- ingestion jobs -------------------------------------------------------------------------------
+
+
+async def test_only_one_job_can_be_running_at_a_time(session: AsyncSession) -> None:
+    """The partial unique index, which is what makes "one run at a time" true across workers."""
+    repo = IngestionJobRepository(session)
+    await repo.claim()
+
+    # Inserted directly: `claim` turns this into JobAlreadyRunningError, and the constraint
+    # underneath it is what is being checked here.
+    with pytest.raises(IntegrityError):
+        await session.execute(insert(IngestionJob).values(state=JobState.RUNNING.value))
+        await session.flush()
+
+
+async def test_a_finished_job_frees_the_slot(session: AsyncSession) -> None:
+    repo = IngestionJobRepository(session)
+    first = await repo.claim()
+
+    await repo.finish(first.id, state=JobState.SUCCEEDED, detail="1 added", report={"counts": "x"})
+    await session.flush()
+    second = await repo.claim()
+
+    assert second.id != first.id
+    await session.refresh(first)
+    assert first.state == JobState.SUCCEEDED.value
+    assert first.finished_at is not None
+    assert first.report == {"counts": "x"}
+
+
+async def test_the_running_job_can_be_found(session: AsyncSession) -> None:
+    repo = IngestionJobRepository(session)
+    assert await repo.running() is None
+
+    job = await repo.claim()
+
+    found = await repo.running()
+    assert found is not None and found.id == job.id
+
+
+async def test_an_invalid_job_state_is_rejected_by_the_database(session: AsyncSession) -> None:
+    with pytest.raises((IntegrityError, DBAPIError)):
+        await session.execute(insert(IngestionJob).values(state="hurrying"))
+        await session.flush()

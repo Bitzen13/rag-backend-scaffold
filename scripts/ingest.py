@@ -19,6 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import customisations
 from chunking.base import ChunkingStrategyError
 from chunking.factory import ConfiguredChunkers, build_chunkers
 from chunking.qa import ChunkQaReport, format_report, format_summary, reports_as_json, review_chunks
@@ -27,12 +28,12 @@ from db.session import (
     create_session_factory,
     database_url_from_settings,
 )
-from embedding.factory import build_embedding_provider
 from extraction.base import read_all
 from extraction.factory import build_extractor
-from ingestion.pipeline import IngestionPipeline, IngestionReport, Outcome
+from ingestion.pipeline import IngestionReport, Outcome
+from observability import configure_logging, install_handler
+from services.ingestion import build_ingestion_pipeline
 from settings import ExtractionConfig, Settings, get_settings
-from vector_store.pgvector_store import PgVectorStore
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CHUNKED_DIR = REPO_ROOT / "chunked"
@@ -55,7 +56,8 @@ def dry_run(settings: Settings, extraction: ExtractionConfig, qa_json: Path | No
     chunkers: ConfiguredChunkers = build_chunkers(settings)
     reports: list[ChunkQaReport] = []
     missing = 0
-    for document in read_all(build_extractor(extraction)):
+    client = customisations.load(settings.customisation)
+    for document in read_all(build_extractor(extraction, client)):
         uri = document.source_uri
         try:
             plan = chunkers.plan_for(uri)
@@ -92,22 +94,18 @@ def dry_run(settings: Settings, extraction: ExtractionConfig, qa_json: Path | No
 
 async def main(args: argparse.Namespace) -> int:
     settings = get_settings()
+    configure_logging(settings)  # now that the secrets are known, redact them by value
     extraction = settings.extraction
     if args.path is not None:
         extraction = extraction.model_copy(update={"path": args.path})
     if args.dry_run:
         return dry_run(settings, extraction, args.qa_json)
-    if settings.vector_db.provider != "pgvector":
-        raise SystemExit(f"vector_db.provider {settings.vector_db.provider!r} is not supported yet")
 
     engine = create_engine(database_url_from_settings(settings))
     try:
-        pipeline = IngestionPipeline(
-            extractor=build_extractor(extraction),
-            chunkers=build_chunkers(settings),
-            embedder=build_embedding_provider(settings),
-            session_factory=create_session_factory(engine),
-            vector_store_factory=PgVectorStore,
+        # The same pipeline the internal admin route runs, built the same way.
+        pipeline = build_ingestion_pipeline(
+            settings, create_session_factory(engine), extraction=extraction
         )
         report = await pipeline.run()
     finally:
@@ -130,8 +128,7 @@ if __name__ == "__main__":
         "--verbose", action="store_true", help="log every chunk (index, size, metadata, preview)"
     )
     args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-    logging.getLogger("httpx").setLevel(logging.WARNING)  # one line per embedding request
+    install_handler(level=logging.INFO)  # replaced once settings load, with their secrets
     if args.verbose:
         logging.getLogger("ingestion").setLevel(logging.DEBUG)
     try:

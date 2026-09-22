@@ -1,0 +1,20 @@
+# Keeps the build context small, and keeps anything that must not ship out of the image.
+.env
+.env.*
+!.env.example
+.git
+.gitignore
+.venv
+**/__pycache__
+**/*.pyc
+.mypy_cache
+.pytest_cache
+.ruff_cache
+# Dry-run output and any local corpus: a client's documents are mounted, never baked in.
+chunked/
+data/
+tests/
+context/
+deploy/
+docker-compose.yml
+Dockerfile

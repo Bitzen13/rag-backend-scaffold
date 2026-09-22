@@ -8,114 +8,60 @@
 # Record it as the baseline with: python scripts/evaluate.py --save-baseline \
 #     evaluation/baselines/retrieval.json
 #
-# The cases below are written against the sample corpus in data/sample. Replace them with
-# questions about your own documents; aim for at least 30 to make the numbers mean anything, and
-# cover the kinds of question that matter: an exact name, a number in a table, a definition, and
-# something only stated in passing.
+# ---------------------------------------------------------------------------------------------
+# REPLACE THIS FILE. These cases are written against the two-document sample corpus in
+# data/sample, which produces four chunks in total - fewer than `retrieval.top_k`. They prove
+# the harness runs end to end; they cannot tell you whether retrieval is any good, because with
+# four chunks every search returns the whole corpus and recall@5 is 1.0 by construction.
+#
+# For a real corpus, write 20-30 questions about your own documents, ideally from whoever asked
+# for the system, and cover the kinds of question that matter: an exact name, a number in a
+# table, a definition, something only stated in passing, a misspelling, and a question your
+# documents do not answer at all. Then record the baseline, and every later change to chunking
+# or retrieval is measured against it rather than argued about.
+# ---------------------------------------------------------------------------------------------
 
 cases:
-  # Exact identifiers in a table: what the typo-tolerant keyword search exists for.
-  - question: What is the radius of VY Canis Majoris?
-    expect: ["Star name: VY Canis Majoris"]
-    source_uri: List_of_largest_stars.pdf
-    note: a table row, found by name rather than by meaning
+  - question: What is Retrieval-Augmented Generation?
+    expect: ["grounds a large language model's answers in external source material"]
+    source_uri: rag-overview.md
+    note: a definition, stated in the opening paragraph
 
-  - question: How large is WOH G64?
-    expect: ["WOH G64"]
-    source_uri: List_of_largest_stars.pdf
-
-  - question: What is the theoretical limit of star size in the Milky Way?
-    expect: ["Theoretical limit of star size"]
-    source_uri: List_of_largest_stars.pdf
-
-  - question: Which stars are listed for the Andromeda and Triangulum galaxies?
-    expect: ["Andromeda and Triangulum"]
-    source_uri: List_of_largest_stars.pdf
-
-  # Misspelled on purpose: the answer should still be found.
-  - question: how big is VY Canis Majorus
-    expect: ["Star name: VY Canis Majoris"]
-    source_uri: List_of_largest_stars.pdf
-    note: misspelling; vector search alone tends to miss this
-
-  # Definitions and explanations: what vector search is good at.
-  - question: How are the angular diameters of stars measured?
-    expect: ["angular diameters of stars can be measured directly using stellar interferometry"]
-    source_uri: List_of_largest_stars.pdf
-
-  - question: Why are the radii of the largest stars uncertain?
-    expect: ["issues exist in determining accurate radii of the largest stars"]
-    source_uri: List_of_largest_stars.pdf
-
-  - question: Where does the word rocket come from?
-    expect: ["comes from the Italian rocchetta"]
-    source_uri: Rocket.pdf
-
-  - question: Who first proposed using rockets for human spaceflight?
-    expect: ["William Leitch first proposed the concept of using rockets"]
-    source_uri: Rocket.pdf
-
-  - question: What was the first successful human spaceflight?
-    expect: ["The first successful human spaceflight was Vostok 1"]
-    source_uri: Space_exploration.pdf
-
-  - question: Who was the first person in space and when?
-    expect: ["Yuri Gagarin, on 12 April 1961"]
-    source_uri: Space_exploration.pdf
-
-  - question: What was MW 18014?
-    expect: ["MW 18014 was a German V-2 rocket test launch"]
-    source_uri: Space_exploration.pdf
-
-  - question: What goal did Kennedy set for the Space Race?
-    expect: ["setting the goal of landing a man on the Moon"]
-    source_uri: Human_spaceflight.pdf
-
-  - question: Which rocket sent Apollo to the Moon?
-    expect: ["developing the Saturn V rocket"]
-    source_uri: Human_spaceflight.pdf
-
-  - question: Who led the Space Task Group after Apollo?
-    expect: ["Spiro Agnew, to head a Space Task Group"]
-    source_uri: Human_spaceflight.pdf
-
-  - question: Are astronomy and astrophysics the same thing?
-    expect: ["broadly synonymous in modern usage"]
-    source_uri: Astronomy.pdf
-
-  - question: What is the Nebra sky disc?
-    expect: ["Nebra sky disc"]
-    source_uri: Astronomy.pdf
-
-  - question: How old is the universe according to the Big Bang theory?
-    expect: ["extremely hot and dense state about 13."]
-    source_uri: Outer_space.pdf
-
-  - question: What is the average energy density of the universe?
-    expect: ["5.9 protons per cubic meter"]
-    source_uri: Outer_space.pdf
-
-  - question: Where does the term "space" come from?
-    expect: ["the region beyond Earth's sky"]
-    source_uri: Outer_space.pdf
-
-  - question: What was the first probe to study another planet?
-    expect: ["Mariner 2 was the first probe to study another planet"]
-    source_uri: Uncrewed_spacecraft.pdf
-
-  - question: What does a spacecraft bus provide?
-    expect: ["The bus provides physical structure, thermal control"]
-    source_uri: Uncrewed_spacecraft.pdf
-
-  - question: What does the structure of a spacecraft do?
-    expect: ["provides overall mechanical integrity of the spacecraft"]
-    source_uri: Uncrewed_spacecraft.pdf
-
-  # The project's own documents, to check that small sources are not drowned out.
-  - question: What does the retrieval stage of a RAG pipeline do?
-    expect: ["retrieval", "Retrieval"]
+  - question: Why does RAG reduce made-up answers?
+    expect: ["the model is instructed to stay within the retrieved context"]
     source_uri: rag-overview.md
 
-  - question: What are the stages of the ingestion pipeline?
-    expect: ["chunk", "Chunk"]
+  - question: Do I have to retrain the model when the documents change?
+    expect: ["updating the underlying documents updates the answers, with no model retraining"]
+    source_uri: rag-overview.md
+    note: the answer is phrased as a benefit, not as the question asks it
+
+  - question: What are the two phases of a RAG system?
+    expect: ["Ingestion prepares the knowledge base", "Querying happens at request time"]
+    source_uri: rag-overview.md
+    note: either passage counts; both are in the same section
+
+  - question: What happens to a question at request time?
+    expect: ["The question is embedded, the most similar chunks are retrieved"]
+    source_uri: rag-overview.md
+
+  - question: Which pipeline stage has to change for a new data source?
+    expect: ["the only\nstage that needs to change when the system is pointed at a new data source"]
+    source_uri: pipeline-stages.txt
+
+  - question: What is chunk overlap for?
+    expect: ["Overlap keeps ideas\nthat straddle a boundary intact"]
+    source_uri: pipeline-stages.txt
+
+  - question: Where are the vectors stored by default?
+    expect: ["The default implementation uses pgvector inside Postgres"]
+    source_uri: pipeline-stages.txt
+
+  - question: How does retrieval handle a misspelled name?
+    expect: ["typo-tolerant keyword search"]
+    source_uri: pipeline-stages.txt
+    note: what the fuzzy search exists for; retrieval.fuzzy_top_k turns it off
+
+  - question: Is retrieved text trusted by the prompt?
+    expect: ["Retrieved text is treated as untrusted data"]
     source_uri: pipeline-stages.txt

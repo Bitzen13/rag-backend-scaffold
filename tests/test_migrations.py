@@ -16,6 +16,8 @@ EXPECTED_TABLES = {
     "chunks",
     "chunk_vectors",
     "api_keys",
+    "api_key_rate_limits",
+    "ingestion_jobs",
     "query_logs",
     "alembic_version",
 }

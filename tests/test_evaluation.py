@@ -194,8 +194,9 @@ def write_dataset(tmp_path: Path, body: str) -> Path:
 
 
 def test_the_shipped_evaluation_set_loads() -> None:
+    """Whatever questions.yaml holds must parse — it is replaced per project, so no count here."""
     cases = load_dataset(Path("evaluation/questions.yaml"))
-    assert len(cases) >= 20
+    assert cases
     assert all(case.question and case.expect for case in cases)
 
 

@@ -1,3 +1,7 @@
+# The client-specific module this deployment runs with (customisations/<name>), for a format or
+# a data source only this client has. Unset means none; see customisations/README.md.
+# customisation: acme
+
 extraction:
   provider: filesystem
   path: data/sample
@@ -26,7 +30,10 @@ chunking:
   # Sizes are in tokens of the embedding model below, counted with its own tokenizer.
   chunk_size: 500
   chunk_overlap: 50
-  max_chunk_tokens: 7781         # hard cap per chunk; must stay under the model's input limit
+  # Hard cap per chunk. Left unset on purpose: it is derived from the embedding model's own
+  # input limit. Set it only for a model whose limit chunking/tokenizer.py does not know, in
+  # which case config loading fails with that message rather than guessing.
+  # max_chunk_tokens: 8000
   tokenizer: auto                # auto (the embedding model's tokenizer) | words
   prose_splitting: sentence      # paragraph | sentence - where document_aware cuts long prose
   # Pick a strategy for EACH document (key = path relative to extraction.path). A document that
@@ -38,17 +45,10 @@ chunking:
   #     chunk_size: 400
   #     prose_splitting: paragraph
   documents:
+    # REPLACE THIS with your own documents. These two are the sample corpus in data/sample,
+    # kept small on purpose so a clean clone can run `scripts/ingest.py --dry-run` immediately.
     rag-overview.md: document_aware
     pipeline-stages.txt: fixed_size
-    List_of_largest_stars.pdf: document_aware
-    Space_exploration.pdf: document_aware
-    Astronomy.pdf: document_aware
-    Human_spaceflight.pdf: document_aware
-    Outer_space.pdf: document_aware
-    Rocket.pdf: document_aware
-    Uncrewed_spacecraft.pdf: document_aware
-    Stellar_classification.pdf: document_aware
-    Carbon_star.pdf: document_aware
 
 retrieval:
   top_k: 5
@@ -64,8 +64,15 @@ models:
   embedding_provider: openai
   embedding_model: text-embedding-3-small
   llm_provider: anthropic
-  llm_model: claude-sonnet-4-6
+  # Check the current model ids before starting a project: https://docs.claude.com/en/docs/about-claude/models
+  llm_model: claude-sonnet-5
   llm_max_tokens: 1024
+  # How long a provider call may take, and how many times it may be retried before the request
+  # is answered 503. Retries are the provider SDK's own, and are bounded.
+  llm_timeout_seconds: 60
+  llm_max_retries: 3
+  embedding_timeout_seconds: 30
+  embedding_max_retries: 3
 
 vector_db:
   provider: pgvector
@@ -76,3 +83,24 @@ auth:
 api:
   # Rejected with 400 before the question reaches the embedding or LLM call.
   max_question_chars: 2000
+  # Store each answered question in query_logs. api_keys.last_used_at is recorded either way.
+  log_queries: true
+  # Per-key limiting, counted in Postgres so several workers share one allowance.
+  rate_limit:
+    requests: 60                 # per window, per key; 0 turns limiting off
+    window_seconds: 60
+  cors:
+    # Only for a browser calling this API directly, which would mean shipping it an API key.
+    # Consumer frontends call from their own server, where CORS does not apply. Empty = off.
+    allowed_origins: []
+
+database:
+  # A statement that runs longer than this is cancelled, so a hung query surfaces as a 503
+  # instead of holding a worker open. Covers the vector search and the keyword search too:
+  # both are Postgres.
+  statement_timeout_seconds: 30
+  connect_timeout_seconds: 10
+
+logging:
+  level: INFO
+  format: text                   # text | json - json is one object per line, for a log shipper

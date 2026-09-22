@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models import Chunk, ChunkVector, Source
 from db.session import create_engine, create_session_factory, database_url_from_settings
+from observability import configure_logging, install_handler
 from settings import get_settings
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -136,6 +137,7 @@ def confirm(summaries: list[SourceSummary], files: list[Path]) -> bool:
 
 async def main(args: argparse.Namespace) -> int:
     settings = get_settings()
+    configure_logging(settings)
     if settings.vector_db.provider != "pgvector":
         raise SystemExit(
             f"vector_db.provider {settings.vector_db.provider!r} is not supported yet: "
@@ -220,7 +222,7 @@ if __name__ == "__main__":
         help=f"leave the {CHUNKED_DIR.name}/ dry-run output in place",
     )
     args = parser.parse_args()
-    logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
+    install_handler(level=logging.WARNING)
     try:
         sys.exit(asyncio.run(main(args)))
     except (RuntimeError, ValueError) as exc:

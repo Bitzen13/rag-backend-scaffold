@@ -25,6 +25,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import customisations
 from chunking.factory import build_chunkers
 from db.repositories.chunks import ChunkRepository
 from db.session import create_engine, create_session_factory, database_url_from_settings
@@ -35,6 +36,7 @@ from evaluation.check import check_dataset
 from evaluation.dataset import DatasetError, load_dataset
 from evaluation.harness import EvalRun, RetrievalHarness, format_run
 from extraction.factory import build_extractor
+from observability import configure_logging, install_handler
 from retrieval.retriever import Retriever
 from settings import get_settings
 from vector_store.base import VectorFilter
@@ -45,6 +47,7 @@ DEFAULT_DATASET = Path("evaluation/questions.yaml")
 
 async def evaluate(dataset: Path, source_type: str | None) -> EvalRun:
     settings = get_settings()
+    configure_logging(settings)
     if settings.vector_db.provider != "pgvector":
         raise SystemExit(f"vector_db.provider {settings.vector_db.provider!r} is not supported yet")
 
@@ -77,7 +80,9 @@ def check(dataset: Path) -> int:
     """Report the cases the corpus cannot satisfy, without touching the database."""
     settings = get_settings()
     result = check_dataset(
-        load_dataset(dataset), build_extractor(settings.extraction), build_chunkers(settings)
+        load_dataset(dataset),
+        build_extractor(settings.extraction, customisations.load(settings.customisation)),
+        build_chunkers(settings),
     )
     print(result.describe())
     return 0 if result.ok else 1
@@ -127,7 +132,7 @@ if __name__ == "__main__":
     parser.add_argument("--label", default="", help="a note stored with a recorded baseline")
     parser.add_argument("--verbose", action="store_true", help="log every retrieval call")
     args = parser.parse_args()
-    logging.basicConfig(level=logging.WARNING, format="%(message)s", stream=sys.stderr)
+    install_handler(level=logging.WARNING, text_format="%(message)s", stream=sys.stderr)
     if args.verbose:
         for name in ("retrieval", "evaluation"):
             logging.getLogger(name).setLevel(logging.DEBUG)

@@ -38,6 +38,12 @@
 - Structure detection must be conservative where a false positive corrupts content. Borderless-table detection is the worked example: it requires several independent signals, because reading prose as table rows is worse than missing a table.
 - Changing chunking or retrieval behaviour is a measurement, not an opinion: record a baseline with `scripts/ingest.py --dry-run --qa-json ...` and `scripts/evaluate.py --save-baseline ...` first, and keep the change only if recall@k or MRR improved, or it fixed a defect without regressing them.
 
+## Logging
+
+- Configure logging through `observability.py`, never `logging.basicConfig`: the redacting formatter is what makes "no secrets in logs" a property of the system rather than a habit. Redaction belongs in the formatter, so that records from libraries this project does not own, and exception tracebacks, are covered too.
+- Log with `extra={...}` for anything structured, so the same call reads well in a terminal and is indexable as JSON in production.
+- Never log a credential or a question. Name an API key by its id. A question is user data: it belongs in `query_logs`, which a deployment can switch off.
+
 ## Configuration & Secrets
 
 - All tunable parameters (chunk size/overlap, `top_k`, similarity threshold, model and provider choices) live in `config.yaml` and are loaded once into a typed settings object (e.g. Pydantic settings). No magic numbers in pipeline code.
@@ -58,8 +64,9 @@
 
 - Validate and parse request input before any logic runs. Enforce size limits on `question` before it reaches the embedding or LLM call.
 - Enforce API key auth before any read or mutation. Validate `X-API-Key` against `api_keys.key_hash`, reject inactive keys, and never store or log plaintext keys. Compare hashes in constant time.
-- Apply per-key rate limiting on public routes.
-- Internal/admin routes (ingestion, re-sync, key issuance/revocation) are never publicly exposed and require their own protection.
+- Apply per-key rate limiting on public routes, and enforce it as a dependency so an over-limit caller is refused before the body is parsed or a provider is called. Shared state that must be right across workers (a rate-limit count, a "one run at a time" lock) belongs in Postgres and in one atomic statement, never in process memory: several workers each holding their own copy of a limit means the limit is not the limit.
+- Internal/admin routes (ingestion, re-sync, key issuance/revocation) are never publicly exposed, require their own token in their own header, are left out of the OpenAPI document, and are not mounted at all unless that token is configured. A consumer's API key must never reach them.
+- Per-request bookkeeping that must survive a failing request (a key's last use, a rate-limit count) is committed before the work; a record of the work itself (the query log) is written after, and its failure is logged and swallowed rather than taking away an answer already generated and paid for.
 - Return consistent, predictable response shapes. Errors return `{ "error": string, "code": string }` with appropriate HTTP status codes: 401 invalid/missing key, 400 malformed request (map FastAPI's default 422 validation errors to this), 503 upstream unreachable. An empty retrieval result is a normal 200 (the LLM is still called, with an empty context, and no sources are returned), not an error.
 - Keep route handlers thin — push logic into shared modules (retrieval, generation, services).
 
@@ -69,7 +76,7 @@
 - Apply the similarity threshold from config before building the prompt. If nothing passes, still call the LLM but with an explicit "no relevant passages were found" context, never a pretend-grounded one, and return no sources.
 - Every answer returns source references (`chunk_id`, `source_uri`, `excerpt`) traceable to stored chunks.
 - Treat retrieved chunk text as untrusted data inside the prompt. Delimit it clearly so document content cannot act as instructions to the model.
-- Wrap LLM, embedding, and vector DB calls with timeouts and bounded retries. Surface persistent failures as 503, not as silent empty answers.
+- Wrap LLM, embedding, and vector DB calls with timeouts and bounded retries, with the bounds coming from `config.yaml` rather than constants in a provider module. Surface persistent failures as 503, not as silent empty answers. Do not retry a database statement inside a request: a blind retry of something that may have been a write is worse than the failure it hides.
 
 ## Testing
 
@@ -79,7 +86,16 @@
 - Cover the key behaviors: auth failure, revoked key, malformed request, empty retrieval fallback, and change detection on re-sync.
 - Chunking rules are tested against hand-built elements, not against files, because the rules belong to the element model. Readers are tested against small real files of their format, and must cover what breaks real corpora: an empty file, one huge paragraph, a non-UTF-8 encoding, CRLF line endings, Unicode and CJK text, and a file that is not the format its extension claims.
 
-## Containers
+## Per-client Work
 
-- Keep the Docker image minimal and run as a non-root user.
-- `docker-compose` is for local development only (Postgres and pgvector). Production runs Gunicorn with Uvicorn workers.
+- One codebase, N deployments. A client need is answered at the first seam that fits — config, a reader, an extractor, or an implementation behind an existing Protocol — and a fork of a pipeline stage is never the answer. See `architecture-context.md` §8 for the table.
+- Work only one client has goes in `customisations/<client>/`, reached through those same Protocols, and is selected by the `customisation` config value. It must not fork a pipeline stage, hold configuration that belongs in that client's `config.yaml`, or hold secrets.
+- A client-specific *chunking* rule is not a customisation: it means the element model is missing a field or a kind. Extend `extraction/base.py`, where every client benefits.
+- If two clients would want it, it belongs in the shared codebase.
+
+## Containers & Deployment
+
+- Keep the Docker image minimal, build it in stages so build tools do not ship, and run as a non-root user that owns nothing it does not need to.
+- `docker-compose.yml` at the root is local development only. Production is `deploy/docker-compose.client.yml`, once per client, with Gunicorn supervising Uvicorn workers.
+- Never bake a client's config, corpus or secrets into the image: one image serves every client, and they are mounted or injected at run time.
+- Migrations are their own deploy step, never container start-up or worker start-up: workers would race each other, and with more than one replica the schema would be applied by whichever container booted first.

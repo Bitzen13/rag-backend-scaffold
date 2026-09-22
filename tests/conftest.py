@@ -15,7 +15,7 @@ from alembic.config import Config
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from db.session import to_async_url
@@ -63,6 +63,26 @@ def migrated_database_url() -> str:
         pytest.skip(f"Postgres not reachable at {url!r} (run `docker compose up -d`): {exc}")
     command.upgrade(alembic_config(url), "head")
     return url
+
+
+@pytest_asyncio.fixture
+async def session_factory(
+    migrated_database_url: str,
+) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+    """Real, committing sessions, for code that owns its own transactions.
+
+    The `session` fixture below rolls everything back, which is what most tests want. Anything
+    that commits for itself — the ingestion job service, whose whole point is that its writes
+    outlive the request — needs sessions that really commit, and its rows cleaned up afterwards.
+    """
+    engine = create_async_engine(migrated_database_url, poolclass=NullPool)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        yield factory
+    finally:
+        async with factory() as cleanup, cleanup.begin():
+            await cleanup.execute(text("DELETE FROM ingestion_jobs"))
+        await engine.dispose()
 
 
 @pytest_asyncio.fixture

@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    # 3.11 is the documented floor (code-standards.md); 3.12 is what the production image runs.
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    # The repository and vector-store tests run against a real Postgres with pgvector, because
+    # what they assert — an atomic upsert, a partial unique index, a CHECK constraint, cosine
+    # search — is the database's behaviour and not something a fake can stand in for.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: rag
+          POSTGRES_PASSWORD: rag
+          POSTGRES_DB: rag
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rag"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      TEST_DATABASE_URL: postgresql://rag:rag@localhost:5432/rag_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Format check
+        run: ruff format --check .
+
+      - name: Type check
+        run: mypy .
+
+      - name: Test
+        run: pytest -q
+
+      # Proves a clean clone can chunk its corpus with no database and no API keys — the first
+      # thing anyone starting from this template runs.
+      - name: Dry-run ingestion on the sample corpus
+        run: python scripts/ingest.py --dry-run
+
+      - name: Check the evaluation set is satisfiable
+        run: python scripts/evaluate.py --check-dataset
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The production image is part of the contract, so a change that breaks the build should
+      # fail here rather than at deploy time.
+      - name: Build the production image
+        run: docker build -t rag-backend:ci .
+
+      - name: Confirm it runs as a non-root user
+        run: |
+          uid=$(docker run --rm --entrypoint id rag-backend:ci -u)
+          echo "image runs as uid $uid"
+          test "$uid" != "0"

@@ -6,6 +6,7 @@ Postgres and call no real LLM or embedding API. The app's lifespan is deliberate
 start-up resources is overridden.
 """
 
+import logging
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -17,7 +18,12 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
-from api.dependencies import get_api_key_store, get_query_service
+from api.dependencies import (
+    get_api_key_store,
+    get_query_logger,
+    get_query_service,
+    get_usage_recorder,
+)
 from api.errors import UPSTREAM_MESSAGE
 from db.models import ApiKey
 from embedding.base import EmbeddingError
@@ -26,7 +32,10 @@ from main import create_app
 from retrieval.retriever import RetrievedChunk, Retriever
 from services.api_keys import ApiKeyStore
 from services.query_service import QueryService
-from settings import get_settings
+from services.rate_limit import RateLimiter
+from services.usage import QueryLogger, UsageRecorder
+from settings import RateLimitConfig, get_settings
+from tests.fakes import FakeQueryLogStore, FakeRateLimitStore, FakeSession, FixedClock
 from tests.test_api_keys import FakeApiKeyStore, add_key
 from vector_store.base import VectorFilter
 
@@ -77,6 +86,9 @@ class Harness:
     key: str  # an active key
     revoked_key: str  # a key that was issued and then revoked
     retriever: FakeRetriever
+    keys: FakeApiKeyStore
+    query_log: FakeQueryLogStore
+    clock: FixedClock
 
     def post(self, body: Any, key: str | None = None) -> httpx.Response:
         """POST the body, authenticated with `key` (the active one by default; None sends none)."""
@@ -94,6 +106,9 @@ def harness(
     retrieval_error: Exception | None = None,
     llm_error: Exception | None = None,
     store: ApiKeyStore | None = None,
+    rate_limit: RateLimitConfig | None = None,
+    log_queries: bool = True,
+    query_log_error: Exception | None = None,
 ) -> Iterator[Harness]:
     keys = FakeApiKeyStore()
     active = add_key(keys, label="test-consumer")
@@ -102,12 +117,23 @@ def harness(
     service = QueryService(
         retriever=cast(Retriever, retriever), llm=FakeLLM(llm_error), excerpt_max_chars=20
     )
+    # The real limiter, recorder and logger over in-memory storage: the decisions under test are
+    # the production ones, and only the rows they would have written are faked (tests/fakes.py).
+    clock = FixedClock()
+    limits = rate_limit if rate_limit is not None else RateLimitConfig(requests=0)
+    usage = UsageRecorder(
+        keys, RateLimiter(FakeRateLimitStore(), limits, clock=clock), FakeSession()
+    )
+    query_log_store = FakeQueryLogStore(query_log_error)
+    query_log = QueryLogger(query_log_store, FakeSession(), enabled=log_queries)
 
     app = create_app()
     app.dependency_overrides[get_api_key_store] = lambda: store if store is not None else keys
     app.dependency_overrides[get_query_service] = lambda: service
+    app.dependency_overrides[get_usage_recorder] = lambda: usage
+    app.dependency_overrides[get_query_logger] = lambda: query_log
     try:
-        yield Harness(TestClient(app), active, revoked, retriever)
+        yield Harness(TestClient(app), active, revoked, retriever, keys, query_log_store, clock)
     finally:
         app.dependency_overrides.clear()
 
@@ -331,8 +357,8 @@ def test_openapi_documents_the_route_and_its_errors(api: Harness) -> None:
     operation = schema["paths"]["/api/query"]["post"]
 
     assert operation["summary"] == "Ask a question, answered from the ingested documents"
-    assert set(operation["responses"]) == {"200", "400", "401", "503"}
-    for status in ("400", "401", "503"):
+    assert set(operation["responses"]) == {"200", "400", "401", "429", "503"}
+    for status in ("400", "401", "429", "503"):
         ref = operation["responses"][status]["content"]["application/json"]["schema"]["$ref"]
         assert ref.endswith("/ErrorResponse")
     assert set(schema["components"]["schemas"]["ErrorResponse"]["properties"]) == {"error", "code"}
@@ -367,3 +393,221 @@ def test_health_needs_no_key(api: Harness) -> None:
     assert api.client.get("/health").status_code == 200
     schema = api.client.get("/openapi.json").json()
     assert "security" not in schema["paths"]["/health"]["get"]
+
+
+# --- rate limiting -------------------------------------------------------------------------------
+
+
+def limited(requests: int) -> RateLimitConfig:
+    return RateLimitConfig(requests=requests, window_seconds=60)
+
+
+def test_requests_inside_the_allowance_are_answered() -> None:
+    with harness(one_chunk(), rate_limit=limited(3)) as api:
+        statuses = [api.post({"question": "Why?"}).status_code for _ in range(3)]
+
+    assert statuses == [200, 200, 200]
+
+
+def test_the_request_past_the_allowance_is_429_in_the_standard_shape() -> None:
+    with harness(one_chunk(), rate_limit=limited(2)) as api:
+        api.post({"question": "Why?"})
+        api.post({"question": "Why?"})
+
+        response = api.post({"question": "Why?"})
+
+    assert response.status_code == 429
+    body = response.json()
+    assert body["code"] == "rate_limit_exceeded"
+    assert set(body) == {"error", "code"}
+
+
+def test_a_429_tells_the_caller_when_to_come_back() -> None:
+    with harness(one_chunk(), rate_limit=limited(1)) as api:
+        api.post({"question": "Why?"})
+
+        response = api.post({"question": "Why?"})
+
+    assert 1 <= int(response.headers["Retry-After"]) <= 60
+    assert response.headers["X-RateLimit-Limit"] == "1"
+    assert response.headers["X-RateLimit-Remaining"] == "0"
+
+
+def test_an_answered_request_carries_its_remaining_allowance() -> None:
+    """So a well-behaved consumer can pace itself instead of waiting to be refused."""
+    with harness(one_chunk(), rate_limit=limited(5)) as api:
+        response = api.post({"question": "Why?"})
+
+    assert response.headers["X-RateLimit-Limit"] == "5"
+    assert response.headers["X-RateLimit-Remaining"] == "4"
+
+
+@pytest.mark.parametrize(
+    ("failure", "status"),
+    [
+        ({"llm_error": LLMError("down")}, 503),
+        ({"retrieval_error": EmbeddingError("down")}, 503),
+    ],
+)
+def test_a_failed_request_still_reports_the_allowance(
+    failure: dict[str, Exception], status: int
+) -> None:
+    """The response is built by an exception handler, so the headers are applied by middleware.
+
+    Being told to slow down should not depend on the request having succeeded.
+    """
+    with harness([], rate_limit=limited(5), **failure) as api:  # type: ignore[arg-type]
+        response = api.post({"question": "Why?"})
+
+    assert response.status_code == status
+    assert response.headers["X-RateLimit-Remaining"] == "4"
+
+
+def test_a_request_rejected_before_authorisation_has_no_allowance_headers() -> None:
+    """Nothing is known about a key that did not authenticate, so nothing is claimed about it."""
+    with harness(one_chunk(), rate_limit=limited(5)) as api:
+        response = api.post({"question": "Why?"}, key="rag_unknown")
+
+    assert response.status_code == 401
+    assert "X-RateLimit-Limit" not in response.headers
+
+
+def test_a_limited_request_never_reaches_retrieval_or_the_llm() -> None:
+    """The point of limiting: the expensive part is not paid for a request being refused."""
+    with harness(one_chunk(), rate_limit=limited(1)) as api:
+        api.post({"question": "first"})
+        api.post({"question": "second"})
+        api.post({"question": "third"})
+
+        assert api.retriever.questions == ["first"]
+
+
+def test_the_allowance_returns_with_the_next_window() -> None:
+    with harness(one_chunk(), rate_limit=limited(1)) as api:
+        api.post({"question": "Why?"})
+        assert api.post({"question": "Why?"}).status_code == 429
+
+        api.clock.advance(60)
+
+        assert api.post({"question": "Why?"}).status_code == 200
+
+
+def test_an_over_limit_caller_is_refused_before_the_body_is_validated() -> None:
+    with harness(one_chunk(), rate_limit=limited(1)) as api:
+        api.post({"question": "Why?"})
+
+        response = api.post({"nonsense": True})
+
+    assert response.status_code == 429  # not 400: nothing was parsed
+
+
+def test_limiting_off_answers_every_request() -> None:
+    with harness(one_chunk(), rate_limit=limited(0)) as api:
+        statuses = [api.post({"question": "Why?"}).status_code for _ in range(20)]
+
+    assert set(statuses) == {200}
+
+
+# --- usage recording -----------------------------------------------------------------------------
+
+
+def test_a_request_records_when_its_key_was_last_used(api: Harness) -> None:
+    row = next(k for k in api.keys.rows.values() if k.label == "test-consumer")
+    assert row.last_used_at is None
+
+    api.post({"question": "Why?"})
+
+    assert row.last_used_at is not None
+
+
+def test_an_answered_question_is_logged_with_its_answer_and_chunks(api: Harness) -> None:
+    response = api.post({"question": "  Why is the sky blue?  "})
+
+    assert len(api.query_log.rows) == 1
+    logged = api.query_log.rows[0]
+    assert logged.question == "Why is the sky blue?"  # the trimmed question, as retrieved
+    assert logged.answer == ANSWER
+    assert [str(c) for c in logged.retrieved_chunk_ids] == [
+        s["chunk_id"] for s in response.json()["sources"]
+    ]
+
+
+def test_an_unanswerable_question_is_logged_with_no_chunks(empty_api: Harness) -> None:
+    empty_api.post({"question": "Who won the 1998 World Cup?"})
+
+    assert empty_api.query_log.rows[0].retrieved_chunk_ids == []
+
+
+def test_a_rejected_request_is_never_logged_as_a_query() -> None:
+    """401, 400 and 429 all end before an answer exists, so there is nothing to log."""
+    with harness(one_chunk(), rate_limit=limited(2)) as api:
+        assert api.post({"question": "Why?"}, key="rag_unknown").status_code == 401
+        assert api.post({"not-a-question": True}).status_code == 400  # counts: it was authorised
+        assert api.post({"question": "answered"}).status_code == 200
+        assert api.post({"question": "over the limit"}).status_code == 429
+
+        assert [row.question for row in api.query_log.rows] == ["answered"]
+
+
+def test_query_logging_can_be_turned_off() -> None:
+    """A deployment holding sensitive questions still gets its key accounting."""
+    with harness(one_chunk(), log_queries=False) as api:
+        assert api.post({"question": "something private"}).status_code == 200
+
+        assert api.query_log.rows == []
+
+
+def test_a_failed_query_log_does_not_cost_the_caller_their_answer() -> None:
+    """The LLM call has already been paid for; a bookkeeping fault must not throw it away."""
+    with harness(one_chunk(), query_log_error=SQLAlchemyError("log table is gone")) as api:
+        response = api.post({"question": "Why?"})
+
+    assert response.status_code == 200
+    assert response.json()["answer"] == ANSWER
+
+
+# --- what the request log does and does not say --------------------------------------------------
+
+
+def test_every_response_carries_a_request_id(api: Harness) -> None:
+    response = api.post({"question": "Why?"})
+
+    assert uuid.UUID(response.headers["X-Request-ID"])
+
+
+def test_the_request_log_names_the_key_by_id_and_never_by_value(
+    api: Harness, caplog: pytest.LogCaptureFixture
+) -> None:
+    row = next(k for k in api.keys.rows.values() if k.label == "test-consumer")
+
+    with caplog.at_level(logging.INFO, logger="api.request"):
+        api.post({"question": "Why is the sky blue?"})
+
+    fields = next(r for r in caplog.records if r.name == "api.request").__dict__
+    assert fields["api_key_id"] == str(row.id)
+    assert fields["path"] == "/api/query"
+    assert fields["status"] == 200
+
+
+def test_the_request_log_holds_neither_the_key_nor_the_question(
+    api: Harness, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The key is a credential; the question is user data and belongs in query_logs, not here."""
+    with caplog.at_level(logging.INFO):
+        api.post({"question": "Why is the sky blue?"})
+
+    logged = "\n".join(f"{r.getMessage()} {r.__dict__}" for r in caplog.records)
+    assert api.key not in logged
+    assert "Why is the sky blue?" not in logged
+
+
+def test_an_upstream_failure_logs_the_cause_without_the_caller_seeing_it(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    failure = LLMError("anthropic key sk-ant-secret rejected")
+    with harness([], llm_error=failure) as api, caplog.at_level(logging.ERROR):
+        response = api.post({"question": "Why?"})
+
+    assert response.status_code == 503
+    assert "sk-ant-secret" not in response.text
+    assert any("upstream failure" in r.getMessage() for r in caplog.records)

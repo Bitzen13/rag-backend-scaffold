@@ -15,6 +15,7 @@ Beyond the core question-answering loop, the system includes the infrastructure 
 - **Be entirely UI-agnostic.** The system exposes functionality only through an authenticated API — it makes no assumptions about, and has no dependency on, what consumes it.
 - **Make configuration the primary lever for tuning.** Chunk size, retrieval depth, model choice, and similar parameters should be adjustable from a single config surface.
 - **Stay in sync with changing source data.** The system should detect when underlying documents have changed and re-ingest only what's needed.
+- **Serve each client company from its own deployment.** One instance, one database and one corpus per client, so isolation is physical rather than enforced by a query filter, and a client's configuration, models and extraction layer can differ without affecting anyone else.
 - **Be safe to run in a real environment.** Credentials should never be hardcoded, and API access should be controllable per consumer.
 - **Be quickly verifiable.** The API should be testable directly (e.g. via curl or an API client) without requiring any frontend to exist.
 
@@ -46,17 +47,28 @@ Beyond the core question-answering loop, the system includes the infrastructure 
 **Generation**
 - Prompt construction combining retrieved context with the user's question
 - Conversational prompt template: greetings and small talk are answered naturally, while factual answers come only from retrieved context (the model says it lacks the information otherwise)
-- Configurable LLM provider/model
+- Configurable LLM provider/model — Anthropic and OpenAI both implemented behind one interface, so a client's existing account is a config change
 
 **API**
 - POST /api/query — accepts a question, returns an answer plus source references
 - API-key-based authentication, with per-key issuance/revocation
-- Rate limiting per API key
+- Rate limiting per API key, counted in the database so several workers share one allowance rather than one each
+- Query logging per answered question, switchable off for a deployment whose questions are sensitive
+- Internal admin routes for triggering ingestion and managing keys, behind their own token and not mounted unless one is set
 - OpenAPI-documented, so any consumer can generate a client or integrate without reading source code
 
 **Configuration**
 - Single configuration file controlling chunking, retrieval, and model parameters, validated on load so a setting that cannot take effect is an error rather than a silent no-op
+- Timeouts and bounded retries on every call that leaves the process, so a slow dependency costs a 503 rather than a stuck request
 - Environment-variable-based credential handling
+
+**Operations**
+- Structured logging (text or JSON) that redacts anything resembling a secret at the formatter, so no code path can leak one
+- A request id per call, returned to the caller and logged, so a report of "it failed" is traceable
+- A production image (non-root, multi-stage) with Gunicorn supervising Uvicorn workers, and migrations as their own deploy step rather than a start-up race
+- One deployment per client from a single template: the same image, the client's own config, secrets, corpus and keys
+- A customisation boundary so N deployments stay one codebase — a client's own format or data source lives behind the existing Protocols in a module the shared code does not own, never in a fork
+- CORS off by default, because a consumer calls this API server-side and an API key must never reach a browser
 
 **Measurement**
 - Chunk quality report before anything is stored: size distribution, oversized or empty chunks, duplicates, cuts in the wrong place
@@ -79,8 +91,13 @@ A new client (e.g., a newly built frontend, or a Slack bot) is issued its own AP
 **5. Tuning retrieval behavior**
 A developer records a baseline (`scripts/ingest.py --dry-run --qa-json ...` and `scripts/evaluate.py --save-baseline ...`), adjusts chunk size, splitting mode or retrieval count in the config file, re-runs both, and keeps the change only if recall@k or MRR improved — no frontend involved at all.
 
-**7. Ingesting a format nobody planned for**
+**6. Ingesting a format nobody planned for**
 A directory turns out to contain .eml exports and a spreadsheet alongside the PDFs. Each goes to its own reader, and a format with no reader is read as plain text with light structure detection, so the run completes rather than skipping files.
 
-**6. Handling a question with no relevant context**
+**7. Trying to outrun the rate limit**
+A consumer loops on /api/query. Its allowance for the window runs out and further calls get 429
+with `Retry-After`, before any embedding or LLM call is made. Other consumers' keys are unaffected,
+because the allowance is per key.
+
+**8. Handling a question with no relevant context**
 Retrieval returns nothing above the similarity threshold; the LLM is still called with an empty context. A greeting or small talk gets a natural reply; a factual question gets a statement that the information is not in the knowledge base, rather than a fabricated answer.

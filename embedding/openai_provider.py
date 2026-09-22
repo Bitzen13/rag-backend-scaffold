@@ -6,15 +6,30 @@ from openai import AsyncOpenAI
 from embedding.base import EmbeddingError
 
 BATCH_SIZE = 96
-TIMEOUT_SECONDS = 30.0
-MAX_RETRIES = 3
+DEFAULT_TIMEOUT_SECONDS = 30.0
+DEFAULT_MAX_RETRIES = 3
 
 
 class OpenAIEmbeddingProvider:
-    def __init__(self, api_key: str, model: str, client: AsyncOpenAI | None = None) -> None:
+    """OpenAI embeddings behind the EmbeddingProvider contract.
+
+    The timeout and retry count come from `models.*` in config.yaml. The SDK's retries are
+    bounded by `max_retries`; a failure that outlives them — a timeout included — is raised as an
+    `EmbeddingError` and answered 503, rather than retried until the caller gives up.
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        client: AsyncOpenAI | None = None,
+        *,
+        timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+    ) -> None:
         self._model = model
         self._client = client or AsyncOpenAI(
-            api_key=api_key, timeout=TIMEOUT_SECONDS, max_retries=MAX_RETRIES
+            api_key=api_key, timeout=timeout_seconds, max_retries=max_retries
         )
 
     @property

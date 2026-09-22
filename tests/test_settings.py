@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from settings import load_settings
 
 VALID_CONFIG: dict[str, Any] = {
-    "extraction": {"provider": "filesystem", "path": "data/sample", "extensions": [".md", ".txt"]},
+    "extraction": {"provider": "filesystem", "path": "documents", "extensions": [".md", ".txt"]},
     "chunking": {
         "chunk_size": 500,
         "chunk_overlap": 50,
@@ -26,7 +26,13 @@ VALID_CONFIG: dict[str, Any] = {
     "auth": {"api_key_header": "X-API-Key"},
 }
 
-SECRET_ENV_VARS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "DATABASE_URL", "VECTOR_DB_URL")
+SECRET_ENV_VARS = (
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "DATABASE_URL",
+    "VECTOR_DB_URL",
+    "ADMIN_API_TOKEN",
+)
 
 
 @pytest.fixture(autouse=True)
@@ -135,7 +141,7 @@ def test_valid_config_loads(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("overrides", "bad_field"),
     [
-        ({"extraction": {"provider": "carrier_pigeon"}}, "provider"),
+        ({"extraction": {"provider": ""}}, "provider"),
         ({"extraction": {"extensions": ["md"]}}, "extensions"),
         ({"chunking": {"chunk_size": -1}}, "chunk_size"),
         ({"chunking": {"chunk_size": 0}}, "chunk_size"),
@@ -211,3 +217,142 @@ def test_fuzzy_retrieval_settings_have_defaults_and_are_validated(tmp_path: Path
         load_settings(
             write_config(tmp_path, {"retrieval": {"fuzzy_min_similarity": 1.5}}), env_file=None
         )
+
+
+# --- Phase 8 sections ----------------------------------------------------------------------------
+
+
+def test_hardening_sections_have_working_defaults(tmp_path: Path) -> None:
+    """A config written before Phase 8 must keep loading, with limits and bounds in place."""
+    settings = load_settings(write_config(tmp_path), env_file=None)
+
+    assert settings.api.rate_limit.requests == 60
+    assert settings.api.rate_limit.window_seconds == 60
+    assert settings.api.log_queries is True
+    assert settings.database.statement_timeout_seconds == 30.0
+    assert settings.database.connect_timeout_seconds == 10.0
+    assert (settings.logging.level, settings.logging.format) == ("INFO", "text")
+    assert settings.models.llm_timeout_seconds == 60.0
+    assert settings.models.llm_max_retries == 3
+    assert settings.models.embedding_timeout_seconds == 30.0
+    assert settings.models.embedding_max_retries == 3
+
+
+def test_rate_limiting_can_be_turned_off_but_not_made_nonsense(tmp_path: Path) -> None:
+    off = load_settings(
+        write_config(tmp_path, {"api": {"rate_limit": {"requests": 0}}}), env_file=None
+    )
+    assert off.api.rate_limit.requests == 0
+
+    with pytest.raises(ValidationError, match="requests"):
+        load_settings(
+            write_config(tmp_path, {"api": {"rate_limit": {"requests": -1}}}), env_file=None
+        )
+    with pytest.raises(ValidationError, match="window_seconds"):
+        load_settings(
+            write_config(tmp_path, {"api": {"rate_limit": {"window_seconds": 0}}}), env_file=None
+        )
+
+
+@pytest.mark.parametrize(
+    ("section", "values"),
+    [
+        ("models", {"llm_timeout_seconds": 0}),
+        ("models", {"llm_max_retries": -1}),
+        ("models", {"embedding_timeout_seconds": -5}),
+        ("database", {"statement_timeout_seconds": 0}),
+        ("database", {"connect_timeout_seconds": 0}),
+        ("logging", {"level": "CHATTY"}),
+        ("logging", {"format": "xml"}),
+        ("api", {"log_queries": "maybe"}),
+    ],
+)
+def test_a_value_that_cannot_take_effect_is_a_load_time_error(
+    tmp_path: Path, section: str, values: dict[str, Any]
+) -> None:
+    with pytest.raises(ValidationError):
+        load_settings(write_config(tmp_path, {section: values}), env_file=None)
+
+
+def test_an_unknown_key_in_a_new_section_is_rejected_rather_than_ignored(tmp_path: Path) -> None:
+    """A misspelt limit that silently did nothing would be worse than no limit at all."""
+    with pytest.raises(ValidationError):
+        load_settings(
+            write_config(tmp_path, {"api": {"rate_limit": {"requests_per_minute": 10}}}),
+            env_file=None,
+        )
+
+
+def test_the_admin_token_is_a_secret_from_the_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert load_settings(write_config(tmp_path), env_file=None).secrets.admin_api_token is None
+
+    monkeypatch.setenv("ADMIN_API_TOKEN", "operator-token")
+    secrets = load_settings(write_config(tmp_path), env_file=None).secrets
+
+    assert secrets.admin_api_token is not None
+    assert secrets.admin_api_token.get_secret_value() == "operator-token"
+    assert "operator-token" not in repr(secrets)
+
+
+def test_an_unknown_extraction_provider_is_not_a_load_time_error(tmp_path: Path) -> None:
+    """A customisation may register its own, and settings deliberately does not import one.
+
+    It is rejected when the extractor is built instead, at the start of a run rather than part
+    way through it — see tests/test_extraction.py.
+    """
+    settings = load_settings(
+        write_config(tmp_path, {"extraction": {"provider": "carrier_pigeon"}}), env_file=None
+    )
+
+    assert settings.extraction.provider == "carrier_pigeon"
+
+
+def test_the_unimplemented_providers_are_rejected_at_load_time(tmp_path: Path) -> None:
+    """A provider with no implementation must not be selectable: it could only fail later."""
+    for section, values in (
+        ({"embedding_provider": "sentence_transformers"}, None),
+        (None, {"provider": "qdrant"}),
+    ):
+        overrides = {"models": section} if section else {"vector_db": values}
+        with pytest.raises(ValidationError):
+            load_settings(write_config(tmp_path, overrides), env_file=None)  # type: ignore[arg-type]
+
+
+def test_cors_is_off_by_default(tmp_path: Path) -> None:
+    cors = load_settings(write_config(tmp_path), env_file=None).api.cors
+    assert cors.allowed_origins == ()
+    assert cors.allow_credentials is False
+
+
+def test_a_cors_wildcard_is_refused(tmp_path: Path) -> None:
+    """Every browser origin allowed here is one that could be made to carry an API key."""
+    with pytest.raises(ValidationError, match="must not be"):
+        load_settings(
+            write_config(tmp_path, {"api": {"cors": {"allowed_origins": ["*"]}}}), env_file=None
+        )
+
+
+def test_a_cors_origin_without_a_scheme_is_refused(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError, match="scheme"):
+        load_settings(
+            write_config(tmp_path, {"api": {"cors": {"allowed_origins": ["app.example.com"]}}}),
+            env_file=None,
+        )
+
+
+def test_no_customisation_by_default(tmp_path: Path) -> None:
+    assert load_settings(write_config(tmp_path), env_file=None).customisation is None
+
+
+def test_the_example_client_config_is_valid() -> None:
+    """The per-client template is a deployment artefact, so it must not drift from the schema.
+
+    A client is stood up by copying it (context/client-onboarding.md); one that no longer loads
+    would be found by the first operator to try, not by a test.
+    """
+    settings = load_settings(Path("deploy/clients/example/config.yaml"), env_file=None)
+
+    assert settings.extraction.path == Path("data/client")
+    assert settings.chunking.documents  # every document to ingest is listed by name

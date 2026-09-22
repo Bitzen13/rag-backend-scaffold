@@ -3,6 +3,10 @@
 One place maps an extension to a reader, and one reader is the fallback, so a file type nobody
 has written a reader for is still ingested (as plain text with light structure detection) rather
 than skipped. Adding a format means adding a reader here and nothing else.
+
+`extra` readers come from a client's customisation module and are registered first, so a client
+can claim an extension the shared code also handles without changing the shared code (see
+customisations/README.md).
 """
 
 import logging
@@ -48,10 +52,14 @@ class ReaderRegistry:
         return dict.fromkeys(self._by_extension.values())
 
 
-def build_registry(pdf_options: PdfOptions | None = None) -> ReaderRegistry:
+def build_registry(
+    pdf_options: PdfOptions | None = None, extra: Sequence[Reader] = ()
+) -> ReaderRegistry:
     fallback = PlainTextReader()
     return ReaderRegistry(
         [
+            # First wins (`setdefault` per extension), so a client's reader takes precedence.
+            *extra,
             PdfReader(pdf_options),
             MarkdownReader(),
             HtmlReader(),

@@ -1,0 +1,101 @@
+# One client's deployment: this stack, run once per client company.
+#
+# Every client gets the same image and its own everything else — its own database, its own
+# documents, its own config.yaml, its own secrets, its own API keys. Isolation is physical rather
+# than a query filter somebody has to remember to write (see *Considered and not adopted* in
+# context/project-phases.md).
+#
+# Standing up a client is this file plus a directory under deploy/clients/, and no code change.
+# See deploy/README.md for the commands and context/client-onboarding.md for the runbook.
+#
+#   CLIENT=acme docker compose -f deploy/docker-compose.client.yml --env-file deploy/clients/acme/.env up -d
+#
+# `CLIENT` names the directory the client's config and documents are read from, and prefixes the
+# volume and container names so two clients on one host cannot reach each other's data.
+
+name: rag-${CLIENT:?set CLIENT to the client directory name, e.g. CLIENT=acme}
+
+services:
+  api:
+    image: ${IMAGE:-rag-backend:latest}
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      # Secrets come from the client's own .env, which is never committed.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ADMIN_API_TOKEN: ${ADMIN_API_TOKEN:-}
+      DATABASE_URL: postgresql://${POSTGRES_USER:?}:${POSTGRES_PASSWORD:?}@postgres:5432/${POSTGRES_DB:?}
+      CONFIG_PATH: /app/config.yaml
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+    volumes:
+      # The client's tuning, read-only: this is the file that differs between clients.
+      - ./clients/${CLIENT}/config.yaml:/app/config.yaml:ro
+      # The client's corpus, read-only. Only ingestion reads it, and it is never written.
+      - ./clients/${CLIENT}/documents:/app/data/client:ro
+    ports:
+      - "${API_PORT:-8000}:8000"
+
+  # Migrations are their own step, run to completion before the API starts. Not in the image's
+  # CMD: every worker would race the others, and with more than one replica the schema would be
+  # applied by whichever container happened to boot first.
+  migrate:
+    image: ${IMAGE:-rag-backend:latest}
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:?}:${POSTGRES_PASSWORD:?}@postgres:5432/${POSTGRES_DB:?}
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+    restart: "no"
+
+  # Ingestion is a job, not a service: run it on demand with
+  #   docker compose ... run --rm ingest
+  # or trigger it over the internal admin path once the API is up. It is `profiles`-gated so it
+  # does not start with the stack.
+  ingest:
+    image: ${IMAGE:-rag-backend:latest}
+    profiles: ["jobs"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      DATABASE_URL: postgresql://${POSTGRES_USER:?}:${POSTGRES_PASSWORD:?}@postgres:5432/${POSTGRES_DB:?}
+      CONFIG_PATH: /app/config.yaml
+    volumes:
+      - ./clients/${CLIENT}/config.yaml:/app/config.yaml:ro
+      - ./clients/${CLIENT}/documents:/app/data/client:ro
+    command: ["python", "scripts/ingest.py"]
+    restart: "no"
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: ${POSTGRES_DB:?}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ../docker/initdb:/docker-entrypoint-initdb.d:ro
+    # Deliberately no published port: only this stack's own services reach this database.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:

@@ -2,7 +2,9 @@
 
 ## Approach
 
-Build this project incrementally. Context files define what to build, how to build it, and what the current state of progress is. Always implement against these context files, do not infer or invent behavior from scratch.
+Build incrementally. The context files define what to build, how to build it, and why the system
+is shaped the way it is. Always implement against these context files; do not infer or invent
+behavior from scratch.
 
 ## Scoping Rules
 
@@ -14,8 +16,9 @@ Build this project incrementally. Context files define what to build, how to bui
 
 Split an implementation step if it combines:
 
-- UI changes and background task changes
-- Real-time canvas state and database persistence
+- A pipeline stage change and an API change (extraction, chunking, embedding, vector storage,
+  retrieval and generation are independent and are changed independently)
+- A schema migration and the code that depends on it being applied
 - Multiple unrelated API routes
 - Behavior that is not clearly defined in the context files
 
@@ -25,35 +28,39 @@ If a change cannot be verified end to end quickly, the scope is too broad — sp
 
 - Do not invent product behavior that is not defined in the context files.
 - If a requirement is ambiguous, resolve it in the relevant context file before implementing.
-- If a requirement is missing, add it as an open question in `progress-tracker.md` before continuing.
+- If a requirement is missing, write it into the context file that owns it before continuing —
+  `project-overview.md` for scope, `architecture-context.md` for structure, `design-decisions.md`
+  for a choice between alternatives.
 
-## Protected Foundation Components
+## Measurement, Not Opinion
 
-Do not modify generated third-party foundation components unless explicitly instructed.
+Chunking and retrieval changes are measured, never argued. Record a baseline first
+(`scripts/ingest.py --dry-run --qa-json ...` and `scripts/evaluate.py --save-baseline ...`),
+change one thing, and keep it only if recall@k or MRR improved, or it fixed a defect without
+regressing them. `chunking-guide.md` is the guide; `evaluation/baselines/README.md` says where the
+baselines live and why none ships with the template.
 
-This includes:
+## Do Not Modify Without Cause
 
-- `components/ui/*` (shadcn/ui components)
-- third-party library internals
-
-These should remain default and reusable.
-
-Project-specific styling, layout changes, and feature logic must be implemented in app-level components instead of modifying foundation components.
-
-Only modify these files when a task explicitly requires it.
+- Alembic migrations that have already been applied anywhere. Schema changes are new migrations.
+- Third-party library internals and vendored code.
+- `docs/history/build-log.md`, which is a record of how the template was built and is not updated
+  as your project progresses.
 
 ## Keeping Docs In Sync
 
 Update the relevant context file whenever implementation changes:
 
-- System architecture or boundaries
-- Storage model decisions
-- Code conventions or standards
-- Feature scope
+- System architecture or boundaries → `architecture-context.md`
+- Storage model decisions → `architecture-context.md` §3
+- A choice made between real alternatives → `design-decisions.md`
+- Code conventions or standards → `code-standards.md`
+- Feature scope → `project-overview.md`
 
-Progress state must reflect the actual state of the implementation, not the intended state.
+Documentation must reflect the actual state of the implementation, not the intended state.
 
 ## Before Moving To The Next Unit
 
 1. The current unit works end to end within its defined scope.
 2. No invariant defined in `architecture-context.md` was violated.
+3. `ruff check .`, `mypy .` and `pytest` all pass.

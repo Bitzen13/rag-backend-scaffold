@@ -82,10 +82,11 @@ class FilesystemExtractor:
         extensions: Sequence[str],
         pdf_options: PdfOptions | None = None,
         registry: ReaderRegistry | None = None,
+        extra_readers: Sequence[Reader] = (),
     ) -> None:
         self._root = root
         self._extensions = frozenset(e.lower() for e in extensions)
-        self._registry = registry or build_registry(pdf_options)
+        self._registry = registry or build_registry(pdf_options, extra_readers)
 
     @property
     def source_type(self) -> str:

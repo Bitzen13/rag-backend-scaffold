@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from db.models import ApiKey
 from db.repositories.api_keys import ApiKeyRepository
 from db.session import create_engine, create_session_factory, database_url_from_settings
+from observability import configure_logging, install_handler
 from services.api_keys import ApiKeyService
 from settings import get_settings
 
@@ -54,9 +55,6 @@ async def list_keys(session_factory: SessionFactory) -> int:
         state = "active" if key.is_active else "revoked"
         used = key.last_used_at.isoformat(timespec="seconds") if key.last_used_at else "never"
         print(f"{key.id!s:<38}{key.label:<{width + 2}}{state:<9}{used}")
-    if not any(key.last_used_at for key in keys):
-        # Nothing writes last_used_at yet, so "never" would otherwise read as "unused".
-        print("\nNote: use is not recorded yet, so every key shows as never used.")
     return 0
 
 
@@ -110,6 +108,7 @@ async def revoke_keys(
 
 async def main(args: argparse.Namespace) -> int:
     settings = get_settings()
+    configure_logging(settings)
     engine = create_engine(database_url_from_settings(settings))
     session_factory = create_session_factory(engine)
     try:
@@ -139,7 +138,7 @@ if __name__ == "__main__":
         parser.error("one of --label, --list or --revoke is required")
     if args.label and (args.list or args.revoke):
         parser.error("--label issues a key; use it on its own")
-    logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
+    install_handler(level=logging.WARNING)
     try:
         sys.exit(asyncio.run(main(args)))
     except (RuntimeError, ValueError) as exc:

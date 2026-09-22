@@ -136,6 +136,62 @@ class ApiKey(Base):
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class JobState(StrEnum):
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    ABANDONED = "abandoned"  # its worker died; released by an operator so a new run can start
+
+
+class IngestionJob(Base):
+    """One ingestion run triggered through the internal admin path.
+
+    Stored rather than held in the process because the run outlives the request that started it,
+    and the poll asking how it went may reach a different worker.
+    """
+
+    __tablename__ = "ingestion_jobs"
+    __table_args__ = (
+        CheckConstraint(
+            "state IN ('running', 'succeeded', 'failed', 'abandoned')",
+            name="ck_ingestion_jobs_state",
+        ),
+        # Partial unique index: at most one running job, across every worker.
+        Index(
+            "uq_ingestion_jobs_one_running",
+            "state",
+            unique=True,
+            postgresql_where=text("state = 'running'"),
+        ),
+        Index("ix_ingestion_jobs_started_at", "started_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    state: Mapped[str] = mapped_column(Text, default=JobState.RUNNING.value)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=_NOW)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    detail: Mapped[str] = mapped_column(Text, default="", server_default="")
+    report: Mapped[JsonObject] = mapped_column(
+        JSONB, default=dict, server_default=text("'{}'::jsonb")
+    )
+
+
+class ApiKeyRateLimit(Base):
+    """One row per key per fixed window: how many requests that key has made inside it.
+
+    Kept in Postgres rather than in the process because production runs several workers, and a
+    per-process counter would hand each of them the whole allowance (see settings.RateLimitConfig).
+    """
+
+    __tablename__ = "api_key_rate_limits"
+
+    api_key_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("api_keys.id", ondelete="CASCADE"), primary_key=True
+    )
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    request_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+
 class QueryLog(Base):
     __tablename__ = "query_logs"
     __table_args__ = (Index("ix_query_logs_api_key_id", "api_key_id"),)

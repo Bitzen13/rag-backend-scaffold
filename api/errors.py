@@ -34,7 +34,10 @@ class ErrorCode(StrEnum):
 
     MISSING_API_KEY = "missing_api_key"
     INVALID_API_KEY = "invalid_api_key"
+    MISSING_ADMIN_TOKEN = "missing_admin_token"
+    INVALID_ADMIN_TOKEN = "invalid_admin_token"
     INVALID_REQUEST = "invalid_request"
+    RATE_LIMIT_EXCEEDED = "rate_limit_exceeded"
     UPSTREAM_UNAVAILABLE = "upstream_unavailable"
 
 
@@ -60,22 +63,46 @@ ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
         "description": "Malformed body, or a question that is empty or too long",
     },
     401: {"model": ErrorResponse, "description": "The API key is missing, unknown, or revoked"},
+    429: {
+        "model": ErrorResponse,
+        "description": (
+            "This key has used its allowance for the current window. `Retry-After` gives the "
+            "seconds until the next one."
+        ),
+    },
     503: {"model": ErrorResponse, "description": "An upstream service is unreachable"},
 }
 
 
 class ApiError(Exception):
-    """Raised anywhere in a request to return the standard error body."""
+    """Raised anywhere in a request to return the standard error body.
 
-    def __init__(self, status_code: int, code: ErrorCode, error: str) -> None:
+    `headers` carries anything the caller needs to act on the failure — `Retry-After` on a 429,
+    for instance. The body shape never changes, whatever the status.
+    """
+
+    def __init__(
+        self,
+        status_code: int,
+        code: ErrorCode,
+        error: str,
+        headers: Mapping[str, str] | None = None,
+    ) -> None:
         super().__init__(error)
         self.status_code = status_code
         self.code = code
         self.error = error
+        self.headers = dict(headers or {})
 
 
-def error_response(status_code: int, code: str, error: str) -> JSONResponse:
-    return JSONResponse(status_code=status_code, content={"error": error, "code": code})
+def error_response(
+    status_code: int, code: str, error: str, headers: Mapping[str, str] | None = None
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={"error": error, "code": code},
+        headers=dict(headers) if headers else None,
+    )
 
 
 def _field_path(location: tuple[int | str, ...]) -> str:
@@ -87,7 +114,7 @@ def _field_path(location: tuple[int | str, ...]) -> str:
 def install_error_handlers(app: FastAPI) -> None:
     async def on_api_error(_: Request, exc: Exception) -> JSONResponse:
         assert isinstance(exc, ApiError)
-        return error_response(exc.status_code, exc.code.value, exc.error)
+        return error_response(exc.status_code, exc.code.value, exc.error, exc.headers)
 
     async def on_validation_error(_: Request, exc: Exception) -> JSONResponse:
         """FastAPI's own 422 becomes this API's 400 (code-standards.md)."""

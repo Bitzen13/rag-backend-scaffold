@@ -9,7 +9,7 @@ import uuid
 from fastapi import APIRouter
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from api.dependencies import ApiKeyDep, QueryServiceDep, SettingsDep
+from api.dependencies import AuthorizedDep, QueryLoggerDep, QueryServiceDep, SettingsDep
 from api.errors import ERROR_RESPONSES, ApiError, ErrorCode
 from vector_store.base import VectorFilter
 
@@ -74,7 +74,8 @@ async def query(
     payload: QueryRequest,
     settings: SettingsDep,
     service: QueryServiceDep,
-    _api_key: ApiKeyDep,
+    caller: AuthorizedDep,
+    query_log: QueryLoggerDep,
 ) -> QueryResponse:
     limit = settings.api.max_question_chars
     if len(payload.question) > limit:
@@ -89,6 +90,10 @@ async def query(
         else None
     )
     result = await service.answer(payload.question, filters)
+    # After the answer exists, and never at its expense: see services/usage.py.
+    await query_log.record(
+        caller.api_key.id, payload.question, result.answer, [s.chunk_id for s in result.sources]
+    )
     return QueryResponse(
         answer=result.answer,
         sources=[
