@@ -7,7 +7,7 @@ what must.
 
 from typing import Any
 
-from extraction.pdf.borderless import find_borderless_tables, split_cells
+from app.extraction.pdf.borderless import find_borderless_tables, split_cells
 
 FONT = 10.0
 

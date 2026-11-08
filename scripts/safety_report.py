@@ -3,7 +3,7 @@
 Usage: pytest --junitxml=test-results.xml
        python scripts/safety_report.py --junit test-results.xml >> "$GITHUB_STEP_SUMMARY"
 
-Each decision in context/safety-considerations.md has a pytest marker (pyproject.toml). This
+Each decision in docs/safety-considerations.md has a pytest marker (pyproject.toml). This
 script asks pytest which tests carry each marker (collection only, nothing is re-run), looks up
 how those tests did in the JUnit file the real run wrote, and runs the attack set once more to
 print its table. In CI the output lands on the run's Summary page, so every commit carries its
@@ -34,7 +34,7 @@ DECISIONS = (
     ("safety_attacks", "5. Prove the defences work (attack set)"),
     ("safety_untrusted", "6. Treat everything from documents as untrusted"),
 )
-DOC = "context/safety-considerations.md"
+DOC = "docs/safety-considerations.md"
 
 
 @dataclass
@@ -120,7 +120,7 @@ def decision_table(tallies: dict[str, Tally]) -> list[str]:
 
 
 def attack_tables() -> list[str]:
-    from evaluation.attacks import GOALS, format_run
+    from app.evaluation.attacks import GOALS, format_run
     from tests.test_adversarial import NoOutputChecks, run_attack_set
 
     async def both() -> tuple[str, list[str]]:

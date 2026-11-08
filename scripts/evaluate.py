@@ -1,8 +1,8 @@
 """Measure retrieval quality against an evaluation set (no LLM involved).
 
 Usage: python scripts/evaluate.py [--dataset FILE] [--source-type file] [--verbose]
-       python scripts/evaluate.py --save-baseline evaluation/baselines/retrieval.json
-       python scripts/evaluate.py --baseline evaluation/baselines/retrieval.json
+       python scripts/evaluate.py --save-baseline baseline.json
+       python scripts/evaluate.py --baseline baseline.json
        python scripts/evaluate.py --check-dataset    # needs no database or API key
 
 Reports recall@k and MRR over the questions in the evaluation set, using the same retrieval path
@@ -38,31 +38,30 @@ from sqlalchemy.engine import make_url
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import customisations
-from chunking.factory import build_chunkers
-from db.repositories.chunks import ChunkRepository
-from db.session import create_engine, create_session_factory, database_url_from_settings
-from embedding.base import EmbeddingError
-from embedding.factory import build_embedding_provider
-from evaluation import attacks as attack_set
-from evaluation import baseline as baselines
-from evaluation.check import check_dataset
-from evaluation.dataset import DatasetError, load_dataset
-from evaluation.harness import EvalRun, RetrievalHarness, format_run
-from extraction.factory import build_extractor
-from generation.base import LLMError
-from generation.factory import build_llm_provider
-from ingestion.pipeline import Outcome
-from observability import configure_logging, install_handler
-from retrieval.retriever import Retriever
-from safety.output import OutputPolicy, OutputSanitizer
-from services.factory import build_query_service
-from services.ingestion import build_ingestion_pipeline
-from settings import DocumentChunking, Settings, get_settings
-from vector_store.base import VectorFilter
-from vector_store.pgvector_store import PgVectorStore
+from app.chunking.factory import build_chunkers
+from app.db.repositories.chunks import ChunkRepository
+from app.db.session import create_engine, create_session_factory, database_url_from_settings
+from app.embedding.base import EmbeddingError
+from app.embedding.factory import build_embedding_provider
+from app.evaluation import attacks as attack_set
+from app.evaluation import baseline as baselines
+from app.evaluation.check import check_dataset
+from app.evaluation.dataset import DatasetError, load_dataset
+from app.evaluation.harness import EvalRun, RetrievalHarness, format_run
+from app.extraction.factory import build_extractor
+from app.generation.base import LLMError
+from app.generation.factory import build_llm_provider
+from app.ingestion.pipeline import Outcome
+from app.observability import configure_logging, install_handler
+from app.retrieval.retriever import Retriever
+from app.safety.output import OutputPolicy, OutputSanitizer
+from app.services.factory import build_query_service
+from app.services.ingestion import build_ingestion_pipeline
+from app.settings import DocumentChunking, Settings, get_settings
+from app.vector_store.base import VectorFilter
+from app.vector_store.pgvector_store import PgVectorStore
 
-DEFAULT_DATASET = Path("evaluation/questions.yaml")
+DEFAULT_DATASET = Path("app/evaluation/questions.yaml")
 
 
 async def evaluate(dataset: Path, source_type: str | None) -> EvalRun:
@@ -108,9 +107,7 @@ def _attack_settings(settings: Settings, corpus: Path, staged: list[attack_set.A
     chunking = settings.chunking.model_copy(
         update={"documents": {a.uri: DocumentChunking(strategy="document_aware") for a in staged}}
     )
-    return settings.model_copy(
-        update={"extraction": extraction, "chunking": chunking, "customisation": None}
-    )
+    return settings.model_copy(update={"extraction": extraction, "chunking": chunking})
 
 
 async def adversarial() -> attack_set.AttackRun:
@@ -165,7 +162,7 @@ def check(dataset: Path) -> int:
     settings = get_settings()
     result = check_dataset(
         load_dataset(dataset),
-        build_extractor(settings.extraction, customisations.load(settings.customisation)),
+        build_extractor(settings.extraction),
         build_chunkers(settings),
     )
     print(result.describe())
@@ -228,7 +225,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     install_handler(level=logging.WARNING, text_format="%(message)s", stream=sys.stderr)
     if args.verbose:
-        for name in ("retrieval", "evaluation"):
+        for name in ("app.retrieval", "app.evaluation"):
             logging.getLogger(name).setLevel(logging.DEBUG)
     try:
         sys.exit(main(args))

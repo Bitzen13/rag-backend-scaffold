@@ -3,7 +3,7 @@
 The documents in `evaluation/adversarial/` go through the real readers, the real chunker, the real
 prompt and the real output checks. Only retrieval (keyword matching, in memory) and the model
 (`ObedientLLM`, the worst case) are fakes. So what this shows is whether the deterministic
-defences hold when the prompt has failed completely (context/safety-plan.md §2-3).
+defences hold when the prompt has failed completely (docs/safety-considerations.md).
 
 Instructions that only change the words of an answer (the canary attacks) are expected to
 succeed here: nothing deterministic can stop a model saying what a document told it to, and the
@@ -17,9 +17,9 @@ from typing import cast
 
 import pytest
 
-from chunking.factory import build_chunker
-from chunking.tokenizer import WordTokenizer
-from evaluation.attacks import (
+from app.chunking.factory import build_chunker
+from app.chunking.tokenizer import WordTokenizer
+from app.evaluation.attacks import (
     Attack,
     AttackRun,
     AttackSetError,
@@ -31,12 +31,12 @@ from evaluation.attacks import (
     run_attack,
     stage_corpus,
 )
-from extraction.base import ExtractedDocument
-from extraction.readers.registry import build_registry
-from generation.prompt import PromptPassage, build_user_prompt
-from retrieval.retriever import RetrievedChunk, Retriever
-from safety.output import Cleaned, OutputSanitizer
-from services.query_service import QueryService
+from app.extraction.base import ExtractedDocument
+from app.extraction.readers.registry import build_registry
+from app.generation.prompt import PromptPassage, build_user_prompt
+from app.retrieval.retriever import RetrievedChunk, Retriever
+from app.safety.output import Cleaned, OutputSanitizer
+from app.services.query_service import QueryService
 from tests.fakes import KeywordRetriever, ObedientLLM
 from tests.support import plan
 

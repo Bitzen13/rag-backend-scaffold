@@ -14,15 +14,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from db.session import create_engine, create_session_factory, database_url_from_settings
-from embedding.base import EmbeddingError
-from embedding.factory import build_embedding_provider
-from generation.base import LLMError
-from generation.factory import build_llm_provider
-from observability import configure_logging, install_handler
-from services.factory import build_query_service
-from settings import get_settings
-from vector_store.base import VectorFilter
+from app.db.session import create_engine, create_session_factory, database_url_from_settings
+from app.embedding.base import EmbeddingError
+from app.embedding.factory import build_embedding_provider
+from app.generation.base import LLMError
+from app.generation.factory import build_llm_provider
+from app.observability import configure_logging, install_handler
+from app.services.factory import build_query_service
+from app.settings import get_settings
+from app.vector_store.base import VectorFilter
 
 
 async def main(question: str, source_type: str | None) -> None:

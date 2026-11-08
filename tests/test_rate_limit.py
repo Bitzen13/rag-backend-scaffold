@@ -8,8 +8,8 @@ a request is refused, what the caller is told, and that a refused request still 
 import uuid
 from datetime import UTC, datetime
 
-from services.rate_limit import RateLimiter
-from settings import RateLimitConfig
+from app.services.rate_limit import RateLimiter
+from app.settings import RateLimitConfig
 from tests.fakes import FakeRateLimitStore, FixedClock
 
 

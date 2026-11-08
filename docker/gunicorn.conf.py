@@ -12,7 +12,7 @@ Two things this deliberately does not do:
 * **No `preload_app`.** The lifespan opens the database engine and the provider clients per
   worker; preloading would fork those connection pools into every child, where they would be
   shared file descriptors and corrupt each other.
-* **No migrations.** They run as their own step before a deploy (deploy/README.md). A worker that
+* **No migrations.** They run as their own step before a deploy. A worker that
   migrated on boot would race the other workers, and with more than one replica a schema change
   would be applied by whichever container happened to start first.
 """

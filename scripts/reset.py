@@ -27,10 +27,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import Chunk, ChunkVector, Source
-from db.session import create_engine, create_session_factory, database_url_from_settings
-from observability import configure_logging, install_handler
-from settings import get_settings
+from app.db.models import Chunk, ChunkVector, Source
+from app.db.session import create_engine, create_session_factory, database_url_from_settings
+from app.observability import configure_logging, install_handler
+from app.settings import get_settings
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CHUNKED_DIR = REPO_ROOT / "chunked"

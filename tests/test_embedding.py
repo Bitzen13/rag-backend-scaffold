@@ -6,10 +6,10 @@ import openai
 import pytest
 from openai import AsyncOpenAI
 
-from embedding.base import EmbeddingError
-from embedding.factory import build_embedding_provider
-from embedding.openai_provider import BATCH_SIZE, OpenAIEmbeddingProvider
-from settings import load_settings
+from app.embedding.base import EmbeddingError
+from app.embedding.factory import build_embedding_provider
+from app.embedding.openai_provider import BATCH_SIZE, OpenAIEmbeddingProvider
+from app.settings import load_settings
 
 
 class FakeEmbeddings:

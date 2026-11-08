@@ -21,12 +21,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from db.models import ApiKey
-from db.repositories.api_keys import ApiKeyRepository
-from db.session import create_engine, create_session_factory, database_url_from_settings
-from observability import configure_logging, install_handler
-from services.api_keys import ApiKeyService
-from settings import get_settings
+from app.db.models import ApiKey
+from app.db.repositories.api_keys import ApiKeyRepository
+from app.db.session import create_engine, create_session_factory, database_url_from_settings
+from app.observability import configure_logging, install_handler
+from app.services.api_keys import ApiKeyService
+from app.settings import get_settings
 
 SessionFactory = async_sessionmaker[AsyncSession]
 

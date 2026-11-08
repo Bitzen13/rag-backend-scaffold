@@ -6,11 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from extraction.base import ElementKind, ExtractedDocument, ExtractionError, read_all
-from extraction.factory import build_extractor, build_pdf_options
-from extraction.filesystem import FilesystemExtractor, hash_file
-from extraction.readers.markdown import MarkdownReader
-from settings import ExtractionConfig
+from app.extraction.base import ElementKind, ExtractedDocument, ExtractionError, read_all
+from app.extraction.factory import build_extractor, build_pdf_options
+from app.extraction.filesystem import FilesystemExtractor, hash_file
+from app.extraction.readers.markdown import MarkdownReader
+from app.settings import ExtractionConfig
 
 TEXT_EXTENSIONS = (".md", ".txt")
 

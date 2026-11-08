@@ -6,7 +6,7 @@ from sqlalchemy import delete, func, insert, select
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import (
+from app.db.models import (
     ApiKey,
     ApiKeyRateLimit,
     Chunk,
@@ -15,12 +15,12 @@ from db.models import (
     QueryLog,
     SourceStatus,
 )
-from db.repositories.api_keys import ApiKeyRepository
-from db.repositories.chunks import ChunkRepository, NewChunk
-from db.repositories.jobs import IngestionJobRepository
-from db.repositories.query_logs import QueryLogRepository
-from db.repositories.rate_limits import RateLimitRepository
-from db.repositories.sources import SourceRepository
+from app.db.repositories.api_keys import ApiKeyRepository
+from app.db.repositories.chunks import ChunkRepository, NewChunk
+from app.db.repositories.jobs import IngestionJobRepository
+from app.db.repositories.query_logs import QueryLogRepository
+from app.db.repositories.rate_limits import RateLimitRepository
+from app.db.repositories.sources import SourceRepository
 
 
 def new_chunk(source_id: uuid.UUID, index: int, text: str = "some text") -> NewChunk:

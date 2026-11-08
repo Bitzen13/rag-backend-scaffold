@@ -3,10 +3,10 @@ from collections.abc import Sequence
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import SourceStatus
-from db.repositories.chunks import ChunkRepository, NewChunk
-from db.repositories.sources import SourceRepository
-from retrieval.fuzzy import question_phrases
+from app.db.models import SourceStatus
+from app.db.repositories.chunks import ChunkRepository, NewChunk
+from app.db.repositories.sources import SourceRepository
+from app.retrieval.fuzzy import question_phrases
 
 # --- question -> phrases ---------------------------------------------------------------------
 

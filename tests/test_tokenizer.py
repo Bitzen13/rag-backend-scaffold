@@ -4,7 +4,7 @@ import logging
 
 import pytest
 
-from chunking.tokenizer import (
+from app.chunking.tokenizer import (
     INPUT_LIMIT_SAFETY_FRACTION,
     WordTokenizer,
     build_tokenizer,
@@ -61,7 +61,7 @@ def test_special_token_strings_in_a_document_are_counted_not_rejected() -> None:
 def test_a_model_with_no_registered_tokenizer_falls_back_and_says_so(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    with caplog.at_level(logging.INFO, logger="chunking.tokenizer"):
+    with caplog.at_level(logging.INFO, logger="app.chunking.tokenizer"):
         counter = build_tokenizer("auto", "a-model-nobody-has-heard-of")
     if counter.name == "words":
         pytest.skip("tiktoken is unavailable")

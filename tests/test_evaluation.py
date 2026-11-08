@@ -10,17 +10,18 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+import yaml
 
-from chunking.factory import ConfiguredChunkers
-from evaluation import baseline as baselines
-from evaluation.check import check_dataset
-from evaluation.dataset import DatasetError, EvalCase, load_dataset
-from evaluation.harness import EvalRun, RetrievalHarness, format_run
-from evaluation.metrics import CaseResult, mean_reciprocal_rank, recall_at, summarize
-from extraction.base import ExtractedDocument, SourceCandidate
-from retrieval.retriever import RetrievedChunk
-from settings import ChunkingConfig
-from vector_store.base import VectorFilter
+from app.chunking.factory import ConfiguredChunkers
+from app.evaluation import baseline as baselines
+from app.evaluation.check import check_dataset
+from app.evaluation.dataset import DatasetError, EvalCase, load_dataset
+from app.evaluation.harness import EvalRun, RetrievalHarness, format_run
+from app.evaluation.metrics import CaseResult, mean_reciprocal_rank, recall_at, summarize
+from app.extraction.base import ExtractedDocument, SourceCandidate
+from app.retrieval.retriever import RetrievedChunk
+from app.settings import ChunkingConfig
+from app.vector_store.base import VectorFilter
 
 
 class FakeRetriever:
@@ -193,11 +194,14 @@ def write_dataset(tmp_path: Path, body: str) -> Path:
     return path
 
 
-def test_the_shipped_evaluation_set_loads() -> None:
-    """Whatever questions.yaml holds must parse — it is replaced per project, so no count here."""
-    cases = load_dataset(Path("evaluation/questions.yaml"))
-    assert cases
-    assert all(case.question and case.expect for case in cases)
+def test_the_shipped_evaluation_set_is_a_valid_template() -> None:
+    """It ships empty, for a project to fill in, but must already have the shape the loader
+    expects; once cases are added, they must load."""
+    path = Path("app/evaluation/questions.yaml")
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert isinstance(raw["cases"], list)
+    if raw["cases"]:
+        assert all(case.question and case.expect for case in load_dataset(path))
 
 
 def test_a_single_expected_passage_may_be_written_as_a_string(tmp_path: Path) -> None:

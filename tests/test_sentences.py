@@ -2,7 +2,7 @@
 
 import pytest
 
-from chunking.sentences import sentence_spans, word_spans
+from app.chunking.sentences import sentence_spans, word_spans
 
 
 def sentences(text: str) -> list[str]:

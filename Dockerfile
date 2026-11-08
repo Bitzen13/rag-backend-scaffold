@@ -1,5 +1,5 @@
 # Production image. One image serves every client: the client's own config.yaml, secrets and
-# documents are mounted or injected at run time, never baked in (see deploy/README.md).
+# documents are mounted or injected at run time, never baked in.
 #
 # Two stages so the build tools that compile wheels do not ship to production. The runtime stage
 # installs nothing from the network: it copies the virtualenv the builder produced.
@@ -43,23 +43,10 @@ RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin rag
 COPY --from=builder /opt/venv /opt/venv
 
 WORKDIR /app
-COPY --chown=root:root \
-    main.py settings.py observability.py alembic.ini config.yaml ./
-COPY --chown=root:root api ./api
-COPY --chown=root:root chunking ./chunking
-COPY --chown=root:root customisations ./customisations
-COPY --chown=root:root db ./db
-COPY --chown=root:root embedding ./embedding
-COPY --chown=root:root evaluation ./evaluation
-COPY --chown=root:root extraction ./extraction
-COPY --chown=root:root generation ./generation
-COPY --chown=root:root ingestion ./ingestion
+COPY --chown=root:root alembic.ini config.yaml ./
+COPY --chown=root:root app ./app
 COPY --chown=root:root migrations ./migrations
-COPY --chown=root:root retrieval ./retrieval
-COPY --chown=root:root safety ./safety
 COPY --chown=root:root scripts ./scripts
-COPY --chown=root:root services ./services
-COPY --chown=root:root vector_store ./vector_store
 COPY --chown=root:root docker/gunicorn.conf.py ./docker/gunicorn.conf.py
 
 USER rag
@@ -71,7 +58,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).status == 200 else 1)"
 
 # Gunicorn supervises Uvicorn workers: it restarts a worker that dies and reaps one that hangs,
-# which a bare `uvicorn` process does not. Migrations are deliberately NOT run here — see
-# deploy/README.md: a container that migrates on start would have every worker race the others,
-# and a schema change would be applied by whichever replica happened to boot first.
-CMD ["gunicorn", "-c", "docker/gunicorn.conf.py", "main:app"]
+# which a bare `uvicorn` process does not. Migrations are deliberately NOT run here: a container
+# that migrates on start would have every worker race the others, and a schema change would be
+# applied by whichever replica happened to boot first. Run `alembic upgrade head` as its own step.
+CMD ["gunicorn", "-c", "docker/gunicorn.conf.py", "app.main:app"]

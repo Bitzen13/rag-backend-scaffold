@@ -16,7 +16,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from retrieval.retriever import RetrievedChunk
+from app.retrieval.retriever import RetrievedChunk
 
 
 class FakeRateLimitStore:

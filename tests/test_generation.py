@@ -8,19 +8,19 @@ import httpx
 import pytest
 from anthropic import AsyncAnthropic
 
-from generation.anthropic_provider import AnthropicProvider
-from generation.base import LLMError
-from generation.factory import build_llm_provider
-from generation.prompt import (
+from app.generation.anthropic_provider import AnthropicProvider
+from app.generation.base import LLMError
+from app.generation.factory import build_llm_provider
+from app.generation.prompt import (
     NO_PASSAGES_MARKER,
     SYSTEM_PROMPT,
     PromptPassage,
     build_user_prompt,
 )
-from retrieval.retriever import RetrievedChunk, Retriever
-from services.query_service import QueryService
-from settings import load_settings
-from vector_store.base import VectorFilter
+from app.retrieval.retriever import RetrievedChunk, Retriever
+from app.services.query_service import QueryService
+from app.settings import load_settings
+from app.vector_store.base import VectorFilter
 
 # --- prompt ----------------------------------------------------------------------------------
 
@@ -214,11 +214,11 @@ async def test_debug_logs_prompt_and_reply_only_when_enabled(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     llm = FakeLLM("An answer.")
-    with caplog.at_level(logging.INFO, logger="services.query_service"):
+    with caplog.at_level(logging.INFO, logger="app.services.query_service"):
         await service(FakeRetriever([chunk("some text")]), llm).answer("Q?")
     assert caplog.records == []
 
-    with caplog.at_level(logging.DEBUG, logger="services.query_service"):
+    with caplog.at_level(logging.DEBUG, logger="app.services.query_service"):
         await service(FakeRetriever([chunk("some text")]), llm).answer("Q?")
     text = "\n".join(r.getMessage() for r in caplog.records)
     assert "--- user prompt ---" in text

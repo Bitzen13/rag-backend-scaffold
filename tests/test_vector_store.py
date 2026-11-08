@@ -5,11 +5,11 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import EMBEDDING_DIMENSIONS, Chunk, ChunkVector, Source
-from db.repositories.chunks import ChunkRepository, NewChunk
-from db.repositories.sources import SourceRepository
-from vector_store.base import VectorFilter, VectorRecord, VectorStore
-from vector_store.pgvector_store import PgVectorStore
+from app.db.models import EMBEDDING_DIMENSIONS, Chunk, ChunkVector, Source
+from app.db.repositories.chunks import ChunkRepository, NewChunk
+from app.db.repositories.sources import SourceRepository
+from app.vector_store.base import VectorFilter, VectorRecord, VectorStore
+from app.vector_store.pgvector_store import PgVectorStore
 
 
 def unit_vector(axis: int) -> list[float]:
@@ -219,7 +219,7 @@ async def test_deleting_chunks_cascades_to_vectors(session: AsyncSession) -> Non
 async def test_upsert_larger_than_one_batch(
     session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import vector_store.pgvector_store as store_module
+    import app.vector_store.pgvector_store as store_module
 
     monkeypatch.setattr(store_module, "UPSERT_BATCH_SIZE", 2)
     source = await SourceRepository(session).create(

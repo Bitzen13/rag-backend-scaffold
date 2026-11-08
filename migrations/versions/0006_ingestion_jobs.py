@@ -1,7 +1,7 @@
 """Track ingestion runs triggered over the internal admin path.
 
 Ingestion takes minutes, so the admin route starts it and answers 202 rather than holding the
-request open (code-standards.md: long-running work belongs outside request handlers). The
+request open (long-running work belongs outside request handlers). The
 operator then polls for the outcome, which means the run's state has to outlive the request that
 started it, and be visible from whichever worker serves the poll. Hence a table rather than
 process memory.

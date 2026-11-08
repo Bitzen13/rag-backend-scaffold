@@ -13,8 +13,8 @@ from typing import Any
 
 import pytest
 
-import observability
-from observability import (
+from app import observability
+from app.observability import (
     REDACTED,
     JsonFormatter,
     TextFormatter,
@@ -25,7 +25,7 @@ from observability import (
     register_secrets,
     secret_values,
 )
-from settings import load_settings
+from app.settings import load_settings
 
 DATABASE_URL = "postgresql://rag:s3cret-password@db.internal:5432/rag"
 ISSUED_KEY = "rag_zK3xQ8vN2mP7wL9tR4yB6cD1fH5jS0aG"

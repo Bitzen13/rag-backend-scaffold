@@ -13,7 +13,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
-    # 3.11 is the documented floor (code-standards.md); 3.12 is what the production image runs.
+    # 3.11 is the documented floor; 3.12 is what the production image runs.
     strategy:
       fail-fast: false
       matrix:
@@ -65,20 +65,17 @@ jobs:
         run: pytest -q --junitxml=test-results.xml
 
       # Writes the "Safety evidence" table to this run's Summary page: one row per decision in
-      # context/safety-considerations.md, from the results above (nothing is re-run except the
+      # docs/safety-considerations.md, from the results above (nothing is re-run except the
       # attack set's table). Once per run rather than once per Python version, and even when a
       # test failed, since that is when the table matters most.
       - name: Safety evidence summary
         if: ${{ !cancelled() && matrix.python-version == '3.12' }}
         run: python scripts/safety_report.py --junit test-results.xml >> "$GITHUB_STEP_SUMMARY"
 
-      # Proves a clean clone can chunk its corpus with no database and no API keys — the first
-      # thing anyone starting from this template runs.
-      - name: Dry-run ingestion on the sample corpus
+      # Proves a clean clone can run ingestion's dry run with no database and no API keys — the
+      # first thing anyone starting from this template runs.
+      - name: Dry-run ingestion
         run: python scripts/ingest.py --dry-run
-
-      - name: Check the evaluation set is satisfiable
-        run: python scripts/evaluate.py --check-dataset
 
   image:
     runs-on: ubuntu-latest

@@ -3,8 +3,8 @@
 import pytest
 from pydantic import ValidationError
 
-from safety.output import OutputPolicy, OutputSanitizer
-from settings import OutputSafetyConfig
+from app.safety.output import OutputPolicy, OutputSanitizer
+from app.settings import OutputSafetyConfig
 
 pytestmark = pytest.mark.safety_output
 
@@ -120,7 +120,7 @@ def test_ordinary_text_is_left_alone() -> None:
 
 
 def test_removals_are_logged_as_counts_never_content(caplog: pytest.LogCaptureFixture) -> None:
-    caplog.set_level("INFO", logger="safety.output")
+    caplog.set_level("INFO", logger="app.safety.output")
     STRICT.clean_text("![x](https://evil.example/secret-question)", field="answer")
     assert "removed 1" in caplog.text
     assert "secret-question" not in caplog.text

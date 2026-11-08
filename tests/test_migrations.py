@@ -8,7 +8,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from db.models import Base
+from app.db.models import Base
 from tests.conftest import alembic_config
 
 EXPECTED_TABLES = {

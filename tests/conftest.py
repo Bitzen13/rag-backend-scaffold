@@ -18,7 +18,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from db.session import to_async_url
+from app.db.session import to_async_url
 
 DEFAULT_TEST_DATABASE_URL = "postgresql://rag:rag@localhost:5432/rag_test"
 

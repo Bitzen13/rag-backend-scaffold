@@ -5,9 +5,9 @@ from alembic import context
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from db.models import Base
-from db.session import database_url_from_settings, to_async_url
-from settings import load_settings
+from app.db.models import Base
+from app.db.session import database_url_from_settings, to_async_url
+from app.settings import load_settings
 
 config = context.config
 if config.config_file_name is not None:

@@ -6,7 +6,7 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from settings import load_settings
+from app.settings import load_settings
 
 VALID_CONFIG: dict[str, Any] = {
     "extraction": {"provider": "filesystem", "path": "documents", "extensions": [".md", ".txt"]},
@@ -58,7 +58,7 @@ def test_real_config_yaml_is_valid() -> None:
 
 
 def test_every_document_in_the_real_config_has_a_usable_plan() -> None:
-    from chunking.factory import build_chunkers
+    from app.chunking.factory import build_chunkers
 
     settings = load_settings(Path("config.yaml"), env_file=None)
     chunkers = build_chunkers(settings)
@@ -296,17 +296,11 @@ def test_the_admin_token_is_a_secret_from_the_environment(
     assert "operator-token" not in repr(secrets)
 
 
-def test_an_unknown_extraction_provider_is_not_a_load_time_error(tmp_path: Path) -> None:
-    """A customisation may register its own, and settings deliberately does not import one.
-
-    It is rejected when the extractor is built instead, at the start of a run rather than part
-    way through it — see tests/test_extraction.py.
-    """
-    settings = load_settings(
-        write_config(tmp_path, {"extraction": {"provider": "carrier_pigeon"}}), env_file=None
-    )
-
-    assert settings.extraction.provider == "carrier_pigeon"
+def test_an_unknown_extraction_provider_is_a_load_time_error(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError, match="provider"):
+        load_settings(
+            write_config(tmp_path, {"extraction": {"provider": "carrier_pigeon"}}), env_file=None
+        )
 
 
 def test_the_unimplemented_providers_are_rejected_at_load_time(tmp_path: Path) -> None:
@@ -340,19 +334,3 @@ def test_a_cors_origin_without_a_scheme_is_refused(tmp_path: Path) -> None:
             write_config(tmp_path, {"api": {"cors": {"allowed_origins": ["app.example.com"]}}}),
             env_file=None,
         )
-
-
-def test_no_customisation_by_default(tmp_path: Path) -> None:
-    assert load_settings(write_config(tmp_path), env_file=None).customisation is None
-
-
-def test_the_example_client_config_is_valid() -> None:
-    """The per-client template is a deployment artefact, so it must not drift from the schema.
-
-    A client is stood up by copying it (context/client-onboarding.md); one that no longer loads
-    would be found by the first operator to try, not by a test.
-    """
-    settings = load_settings(Path("deploy/clients/example/config.yaml"), env_file=None)
-
-    assert settings.extraction.path == Path("data/client")
-    assert settings.chunking.documents  # every document to ingest is listed by name

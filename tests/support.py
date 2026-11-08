@@ -4,11 +4,11 @@ Tests measure sizes with `WordTokenizer`, so a size in a test reads as a number 
 assertions do not depend on a downloaded tokenizer. `test_tokenizer.py` covers the real one.
 """
 
-from chunking.base import ChunkPlan
-from chunking.tokenizer import Tokenizer, WordTokenizer
-from extraction.base import DocumentElement, ExtractedDocument
-from extraction.elements import place_elements
-from settings import ChunkingStrategy
+from app.chunking.base import ChunkPlan
+from app.chunking.tokenizer import Tokenizer, WordTokenizer
+from app.extraction.base import DocumentElement, ExtractedDocument
+from app.extraction.elements import place_elements
+from app.settings import ChunkingStrategy
 
 HARD_CAP = 8000
 

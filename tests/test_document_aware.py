@@ -5,9 +5,9 @@ they are tested against the element model itself. `test_readers.py` covers produ
 from real files.
 """
 
-from chunking.document_aware import DocumentAwareChunker
-from chunking.tokenizer import build_tokenizer
-from extraction.base import DocumentElement, ElementKind, ExtractedDocument
+from app.chunking.document_aware import DocumentAwareChunker
+from app.chunking.tokenizer import build_tokenizer
+from app.extraction.base import DocumentElement, ElementKind, ExtractedDocument
 from tests.support import document_of, plan, tokenizer, words
 
 TITLE = "List of the largest known stars in the Milky Way"

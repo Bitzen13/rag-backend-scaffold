@@ -14,7 +14,6 @@
 chunked/
 data/
 tests/
-context/
-deploy/
+docs/
 docker-compose.yml
 Dockerfile

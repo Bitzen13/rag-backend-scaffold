@@ -1,11 +1,11 @@
 """The PDF reader must work out structure per document, not assume one document's typography."""
 
-from extraction.base import DocumentElement, ElementKind
-from extraction.pdf import PdfOptions
-from extraction.pdf.builder import StructureBuilder
-from extraction.pdf.clean import TextCleaner
-from extraction.pdf.model import Line, PageFlow, TableBlock
-from extraction.pdf.stats import DocStats
+from app.extraction.base import DocumentElement, ElementKind
+from app.extraction.pdf import PdfOptions
+from app.extraction.pdf.builder import StructureBuilder
+from app.extraction.pdf.clean import TextCleaner
+from app.extraction.pdf.model import Line, PageFlow, TableBlock
+from app.extraction.pdf.stats import DocStats
 
 # --- text cleaning ---------------------------------------------------------------------------
 

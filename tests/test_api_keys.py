@@ -9,8 +9,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from db.models import ApiKey
-from services.api_keys import (
+from app.db.models import ApiKey
+from app.services.api_keys import (
     KEY_PREFIX,
     ApiKeyService,
     generate_api_key,

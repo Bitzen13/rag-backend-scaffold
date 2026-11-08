@@ -1,7 +1,7 @@
 """The chunk quality report: what it flags, and what it correctly leaves alone."""
 
-from chunking.base import TextChunk
-from chunking.qa import (
+from app.chunking.base import TextChunk
+from app.chunking.qa import (
     DEFECTS,
     ChunkQaReport,
     format_report,
@@ -9,8 +9,8 @@ from chunking.qa import (
     reports_as_json,
     review_chunks,
 )
-from db.models import JsonObject
-from extraction.base import ExtractedDocument
+from app.db.models import JsonObject
+from app.extraction.base import ExtractedDocument
 from tests.support import plan, words
 
 

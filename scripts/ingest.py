@@ -22,21 +22,26 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import customisations
-from chunking.base import ChunkingStrategyError
-from chunking.factory import ConfiguredChunkers, build_chunkers
-from chunking.qa import ChunkQaReport, format_report, format_summary, reports_as_json, review_chunks
-from db.session import (
+from app.chunking.base import ChunkingStrategyError
+from app.chunking.factory import ConfiguredChunkers, build_chunkers
+from app.chunking.qa import (
+    ChunkQaReport,
+    format_report,
+    format_summary,
+    reports_as_json,
+    review_chunks,
+)
+from app.db.session import (
     create_engine,
     create_session_factory,
     database_url_from_settings,
 )
-from extraction.base import read_all
-from extraction.factory import build_extractor
-from ingestion.pipeline import IngestionReport, Outcome
-from observability import configure_logging, install_handler
-from services.ingestion import build_ingestion_pipeline
-from settings import ExtractionConfig, Settings, get_settings
+from app.extraction.base import read_all
+from app.extraction.factory import build_extractor
+from app.ingestion.pipeline import IngestionReport, Outcome
+from app.observability import configure_logging, install_handler
+from app.services.ingestion import build_ingestion_pipeline
+from app.settings import ExtractionConfig, Settings, get_settings
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CHUNKED_DIR = REPO_ROOT / "chunked"
@@ -59,8 +64,7 @@ def dry_run(settings: Settings, extraction: ExtractionConfig, qa_json: Path | No
     chunkers: ConfiguredChunkers = build_chunkers(settings)
     reports: list[ChunkQaReport] = []
     missing = 0
-    client = customisations.load(settings.customisation)
-    for document in read_all(build_extractor(extraction, client)):
+    for document in read_all(build_extractor(extraction)):
         uri = document.source_uri
         try:
             plan = chunkers.plan_for(uri)
@@ -138,7 +142,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     install_handler(level=logging.INFO)  # replaced once settings load, with their secrets
     if args.verbose:
-        logging.getLogger("ingestion").setLevel(logging.DEBUG)
+        logging.getLogger("app.ingestion").setLevel(logging.DEBUG)
     try:
         sys.exit(asyncio.run(main(args)))
     except (RuntimeError, FileNotFoundError, ValueError) as exc:

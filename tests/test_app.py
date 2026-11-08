@@ -12,10 +12,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
-import customisations
-import main
-from customisations import Customisation, CustomisationError
-from settings import Settings, load_settings
+from app import main
+from app.settings import Settings, load_settings
 
 ORIGIN = "https://app.example.com"
 
@@ -96,43 +94,6 @@ def test_credentials_are_not_allowed_unless_asked_for(monkeypatch: pytest.Monkey
     response = client.get("/health", headers={"Origin": ORIGIN})
 
     assert "access-control-allow-credentials" not in response.headers
-
-
-# --- the customisation is loaded at start-up ------------------------------------------------------
-
-
-def test_a_customisation_that_does_not_resolve_stops_start_up(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Rather than starting without a client's reader and quietly using the wrong one."""
-    settings_with(monkeypatch, customisation="no_such_client")
-
-    with pytest.raises(CustomisationError):
-        main.create_app()
-
-
-def test_a_loaded_customisation_is_reported_at_start_up(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    """A deployment should say out loud what it is running with."""
-    settings_with(monkeypatch, customisation="acme")
-    monkeypatch.setattr(customisations, "load", lambda name: Customisation())
-
-    with caplog.at_level("INFO", logger="main"):
-        main.create_app()
-
-    assert "customisation 'acme' loaded" in caplog.text
-
-
-def test_no_customisation_is_the_default_and_logs_nothing(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    settings_with(monkeypatch)
-
-    with caplog.at_level("INFO", logger="main"):
-        main.create_app()
-
-    assert "customisation" not in caplog.text
 
 
 # --- the admin surface is off unless configured ---------------------------------------------------

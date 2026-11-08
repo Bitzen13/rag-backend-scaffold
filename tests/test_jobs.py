@@ -11,11 +11,11 @@ from typing import cast
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from db.models import JobState
-from db.repositories.jobs import IngestionJobRepository, JobAlreadyRunningError
-from ingestion.pipeline import DocumentResult, IngestionReport, Outcome
-from services.jobs import IngestionJobService, PipelineFactory
-from settings import get_settings
+from app.db.models import JobState
+from app.db.repositories.jobs import IngestionJobRepository, JobAlreadyRunningError
+from app.ingestion.pipeline import DocumentResult, IngestionReport, Outcome
+from app.services.jobs import IngestionJobService, PipelineFactory
+from app.settings import get_settings
 
 Factory = async_sessionmaker[AsyncSession]
 

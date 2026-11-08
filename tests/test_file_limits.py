@@ -12,13 +12,13 @@ from pathlib import Path
 
 import pytest
 
-from db.repositories.sources import SourceState
-from extraction.filesystem import FilesystemExtractor
-from extraction.limits import FileLimits, LimitExceededError, outside_root
-from extraction.readers.markdown import MarkdownReader
-from extraction.readers.structured import StructuredReader
-from extraction.readers.tabular import ExcelReader
-from ingestion.pipeline import MassDeletionError, check_mass_deletion
+from app.db.repositories.sources import SourceState
+from app.extraction.filesystem import FilesystemExtractor
+from app.extraction.limits import FileLimits, LimitExceededError, outside_root
+from app.extraction.readers.markdown import MarkdownReader
+from app.extraction.readers.structured import StructuredReader
+from app.extraction.readers.tabular import ExcelReader
+from app.ingestion.pipeline import MassDeletionError, check_mass_deletion
 
 # About 300 bytes on disk; expanded, a list of 9**8 = 43 million strings.
 YAML_BOMB = """\

@@ -11,10 +11,10 @@ import uuid
 
 import pytest
 
-from db.models import ApiKey
-from services.rate_limit import RateLimiter
-from services.usage import QueryLogger, UsageRecorder
-from settings import RateLimitConfig
+from app.db.models import ApiKey
+from app.services.rate_limit import RateLimiter
+from app.services.usage import QueryLogger, UsageRecorder
+from app.settings import RateLimitConfig
 from tests.fakes import FakeQueryLogStore, FakeRateLimitStore, FakeSession
 from tests.test_api_keys import FakeApiKeyStore, add_key
 

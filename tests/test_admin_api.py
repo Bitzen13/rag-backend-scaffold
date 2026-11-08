@@ -22,19 +22,19 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
-import api.dependencies as dependencies
-import main
-from api.admin import (
+import app.api.dependencies as dependencies
+from app import main
+from app.api.admin import (
     ADMIN_TOKEN_HEADER,
     admin_routes_enabled,
     get_job_admin,
     get_job_service,
     get_key_admin,
 )
-from db.models import IngestionJob, JobState
-from db.repositories.jobs import JobAlreadyRunningError
-from services.admin import JobAdminService, KeyAdminService
-from settings import Settings, get_settings
+from app.db.models import IngestionJob, JobState
+from app.db.repositories.jobs import JobAlreadyRunningError
+from app.services.admin import JobAdminService, KeyAdminService
+from app.settings import Settings, get_settings
 from tests.fakes import FakeSession
 from tests.test_api_keys import FakeApiKeyStore, add_key
 

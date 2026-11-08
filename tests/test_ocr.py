@@ -9,8 +9,8 @@ from typing import Any
 
 import pytest
 
-from extraction.pdf.clean import OcrSettings
-from extraction.pdf.ocr import POINTS_PER_INCH, TesseractEngine, looks_scanned, ocr_page_words
+from app.extraction.pdf.clean import OcrSettings
+from app.extraction.pdf.ocr import POINTS_PER_INCH, TesseractEngine, looks_scanned, ocr_page_words
 
 
 class FakePage:

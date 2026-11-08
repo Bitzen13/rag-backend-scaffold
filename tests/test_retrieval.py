@@ -5,13 +5,13 @@ from collections.abc import Sequence
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import EMBEDDING_DIMENSIONS, SourceStatus
-from db.repositories.chunks import ChunkRepository, NewChunk
-from db.repositories.sources import SourceRepository
-from embedding.base import EmbeddingError
-from retrieval.retriever import Retriever
-from vector_store.base import VectorFilter, VectorRecord
-from vector_store.pgvector_store import PgVectorStore
+from app.db.models import EMBEDDING_DIMENSIONS, SourceStatus
+from app.db.repositories.chunks import ChunkRepository, NewChunk
+from app.db.repositories.sources import SourceRepository
+from app.embedding.base import EmbeddingError
+from app.retrieval.retriever import Retriever
+from app.vector_store.base import VectorFilter, VectorRecord
+from app.vector_store.pgvector_store import PgVectorStore
 
 TOPICS = ("cats", "dogs", "birds")
 
@@ -140,7 +140,7 @@ async def test_debug_logs_every_candidate_with_score_and_verdict(
 ) -> None:
     await add_source(session, "pets.md", ["cats", "dogs"])
 
-    with caplog.at_level(logging.DEBUG, logger="retrieval.retriever"):
+    with caplog.at_level(logging.DEBUG, logger="app.retrieval.retriever"):
         results = await make_retriever(session).retrieve("tell me about cats")
 
     assert len(results) == 1  # only the chunk above the threshold is returned
@@ -156,7 +156,7 @@ async def test_no_candidate_logging_by_default(
     session: AsyncSession, caplog: pytest.LogCaptureFixture
 ) -> None:
     await add_source(session, "pets.md", ["cats"])
-    with caplog.at_level(logging.INFO, logger="retrieval.retriever"):
+    with caplog.at_level(logging.INFO, logger="app.retrieval.retriever"):
         await make_retriever(session).retrieve("cats")
     assert caplog.records == []
 
@@ -209,7 +209,7 @@ async def test_debug_log_lists_fuzzy_hits(
 ) -> None:
     await add_named_chunk(session, "z.md", "Zorblax Prime is a very unusual star", "dogs")
 
-    with caplog.at_level(logging.DEBUG, logger="retrieval.retriever"):
+    with caplog.at_level(logging.DEBUG, logger="app.retrieval.retriever"):
         await make_retriever(session, fuzzy_top_k=5).retrieve("birds and zorblax prime")
 
     text = "\n".join(r.getMessage() for r in caplog.records)

@@ -14,11 +14,11 @@ import openai
 import pytest
 from openai import AsyncOpenAI
 
-from generation.anthropic_provider import AnthropicProvider
-from generation.base import LLMError
-from generation.factory import build_llm_provider
-from generation.openai_provider import OpenAIProvider
-from settings import Settings, load_settings
+from app.generation.anthropic_provider import AnthropicProvider
+from app.generation.base import LLMError
+from app.generation.factory import build_llm_provider
+from app.generation.openai_provider import OpenAIProvider
+from app.settings import Settings, load_settings
 
 
 class FakeCompletions:

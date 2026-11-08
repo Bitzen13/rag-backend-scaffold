@@ -18,26 +18,26 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
-from api.dependencies import (
+from app.api.dependencies import (
     get_api_key_store,
     get_query_logger,
     get_query_service,
     get_usage_recorder,
 )
-from api.errors import UPSTREAM_MESSAGE
-from db.models import ApiKey
-from embedding.base import EmbeddingError
-from generation.base import LLMError
-from main import create_app
-from retrieval.retriever import RetrievedChunk, Retriever
-from services.api_keys import ApiKeyStore
-from services.query_service import QueryService
-from services.rate_limit import RateLimiter
-from services.usage import QueryLogger, UsageRecorder
-from settings import RateLimitConfig, get_settings
+from app.api.errors import UPSTREAM_MESSAGE
+from app.db.models import ApiKey
+from app.embedding.base import EmbeddingError
+from app.generation.base import LLMError
+from app.main import create_app
+from app.retrieval.retriever import RetrievedChunk, Retriever
+from app.services.api_keys import ApiKeyStore
+from app.services.query_service import QueryService
+from app.services.rate_limit import RateLimiter
+from app.services.usage import QueryLogger, UsageRecorder
+from app.settings import RateLimitConfig, get_settings
+from app.vector_store.base import VectorFilter
 from tests.fakes import FakeQueryLogStore, FakeRateLimitStore, FakeSession, FixedClock
 from tests.test_api_keys import FakeApiKeyStore, add_key
-from vector_store.base import VectorFilter
 
 HEADER = get_settings().auth.api_key_header
 ANSWER = "Rayleigh scattering."
@@ -594,10 +594,10 @@ def test_the_request_log_names_the_key_by_id_and_never_by_value(
 ) -> None:
     row = next(k for k in api.keys.rows.values() if k.label == "test-consumer")
 
-    with caplog.at_level(logging.INFO, logger="api.request"):
+    with caplog.at_level(logging.INFO, logger="app.api.request"):
         api.post({"question": "Why is the sky blue?"})
 
-    fields = next(r for r in caplog.records if r.name == "api.request").__dict__
+    fields = next(r for r in caplog.records if r.name == "app.api.request").__dict__
     assert fields["api_key_id"] == str(row.id)
     assert fields["path"] == "/api/query"
     assert fields["status"] == 200

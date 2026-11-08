@@ -1,0 +1,21 @@
+# Retrieval evaluation set: a question, and a passage from your documents that answers it.
+#
+# A case passes when one of its `expect` passages appears in a retrieved chunk (whitespace and
+# case are ignored). Passages are named by their text rather than by chunk id, so the set stays
+# valid when chunking changes, which is exactly when it is needed.
+#
+# Write 20-30 questions about your own documents. Cover an exact name, a number in a table, a
+# definition, something only stated in passing, a misspelling, and a question your documents do
+# not answer. Then run:
+#
+#   python scripts/evaluate.py --check-dataset     # every case can be satisfied by some chunk
+#   python scripts/evaluate.py                     # recall@k and MRR
+#
+# Example case:
+#
+#   - question: How long is the warranty on the X200?
+#     expect: ["two-year warranty"]
+#     source_uri: product-guide.pdf            # optional: the document it must come from
+#     note: a fact stated once, in a table      # optional
+
+cases: []

@@ -9,9 +9,9 @@ from typing import Any
 
 import pytest
 
-import db.session
-from db.session import connect_args, create_engine, database_url_from_settings, to_async_url
-from settings import DatabaseConfig, load_settings
+from app.db import session as db_session
+from app.db.session import connect_args, create_engine, database_url_from_settings, to_async_url
+from app.settings import DatabaseConfig, load_settings
 
 URL = "postgresql://rag:rag@localhost:5432/rag"
 
@@ -70,7 +70,7 @@ def captured_engine_kwargs(
         captured.update(kwargs, url=url)
         return object()
 
-    monkeypatch.setattr(db.session, "create_async_engine", spy)
+    monkeypatch.setattr(db_session, "create_async_engine", spy)
     create_engine(URL, database)
     return captured
 

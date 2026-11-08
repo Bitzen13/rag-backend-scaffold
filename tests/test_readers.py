@@ -11,17 +11,22 @@ from pathlib import Path
 
 import pytest
 
-from extraction.base import DocumentElement, ElementKind
-from extraction.readers.base import MissingDependencyError, ReaderError, ReadResult, SectionStack
-from extraction.readers.code import CodeReader, block_name, top_level_blocks
-from extraction.readers.docx import DocxReader
-from extraction.readers.email import EmailReader
-from extraction.readers.html import HtmlReader
-from extraction.readers.markdown import MarkdownReader
-from extraction.readers.plaintext import PlainTextReader, looks_like_transcript, parse_timestamp
-from extraction.readers.registry import build_registry
-from extraction.readers.structured import StructuredReader
-from extraction.readers.tabular import CsvReader, ExcelReader, find_header, sniff_delimiter
+from app.extraction.base import DocumentElement, ElementKind
+from app.extraction.readers.base import (
+    MissingDependencyError,
+    ReaderError,
+    ReadResult,
+    SectionStack,
+)
+from app.extraction.readers.code import CodeReader, block_name, top_level_blocks
+from app.extraction.readers.docx import DocxReader
+from app.extraction.readers.email import EmailReader
+from app.extraction.readers.html import HtmlReader
+from app.extraction.readers.markdown import MarkdownReader
+from app.extraction.readers.plaintext import PlainTextReader, looks_like_transcript, parse_timestamp
+from app.extraction.readers.registry import build_registry
+from app.extraction.readers.structured import StructuredReader
+from app.extraction.readers.tabular import CsvReader, ExcelReader, find_header, sniff_delimiter
 
 Write = Callable[[str, str], Path]
 
@@ -617,7 +622,7 @@ def test_the_registry_reports_the_extensions_it_covers() -> None:
 
 
 def test_a_missing_optional_dependency_names_the_package_to_install() -> None:
-    from extraction.readers.base import require
+    from app.extraction.readers.base import require
 
     with pytest.raises(MissingDependencyError, match="pip install nonexistent-package"):
         require("a_module_that_is_not_installed", "nonexistent-package")

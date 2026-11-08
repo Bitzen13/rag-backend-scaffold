@@ -8,11 +8,11 @@ select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "C4", "RUF"]
 [tool.ruff.lint.per-file-ignores]
 # These modules deal in real-world typography on purpose: minus signs, en dashes, curly quotes
 # and the sentence terminators of non-Latin scripts.
-"extraction/pdf/*.py" = ["RUF001"]
-"extraction/tables.py" = ["RUF001"]
-"extraction/readers/*.py" = ["RUF001"]
-"chunking/sentences.py" = ["RUF001"]
-"chunking/qa.py" = ["RUF001"]
+"app/extraction/pdf/*.py" = ["RUF001"]
+"app/extraction/tables.py" = ["RUF001"]
+"app/extraction/readers/*.py" = ["RUF001"]
+"app/chunking/sentences.py" = ["RUF001"]
+"app/chunking/qa.py" = ["RUF001"]
 "tests/test_pdf_extraction.py" = ["RUF001"]
 "tests/test_sentences.py" = ["RUF001"]
 "tests/test_readers.py" = ["RUF001"]
@@ -26,7 +26,7 @@ exclude = ["^\\.venv/"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-# One marker per decision in context/safety-considerations.md, so CI can report the evidence for
+# One marker per decision in docs/safety-considerations.md, so CI can report the evidence for
 # each one (scripts/safety_report.py). A test may carry more than one.
 markers = [
     "safety_output: 1. images and links are removed from what reaches a client",

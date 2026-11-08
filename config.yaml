@@ -1,10 +1,6 @@
-# The client-specific module this deployment runs with (customisations/<name>), for a format or
-# a data source only this client has. Unset means none; see customisations/README.md.
-# customisation: acme
-
 extraction:
   provider: filesystem
-  path: data/sample
+  path: data/documents          # put your documents here
   # Which files are picked up. A reader is chosen per extension (extraction/readers/registry.py):
   # .pdf, .md, .html, .docx, .csv/.tsv, .xlsx, .json/.yaml, .eml/.mbox, source code, and plain
   # text as the fallback for anything else.
@@ -12,13 +8,9 @@ extraction:
   # Corpus-specific cleanup for text extracted from PDFs. These are regular expressions and do not
   # affect how structure (headings, tables, columns) is detected, which is worked out per file.
   pdf:
-    strip_patterns:              # removed wherever they appear
-      - '\[\d+\]'                # numbered citation markers like [12]
-      - 'style="[^"]*"\s*\|?'    # leftover HTML attributes from web-printed pages
-    truncate_patterns:           # text from the first match onward is dropped
-      - 'Template:'              # unrendered wiki templates
-    skip_sections:               # sections left out entirely (by heading text)
-      - References
+    strip_patterns: []           # removed wherever they appear, e.g. '\[\d+\]' for [12]
+    truncate_patterns: []        # text from the first match onward is dropped
+    skip_sections: []            # sections left out entirely, by heading text, e.g. References
     borderless_tables: true      # also detect tables aligned with whitespace, not ruling lines
     ocr:                         # read pages that are an image of text (needs Tesseract)
       enabled: false
@@ -26,7 +18,7 @@ extraction:
       min_characters: 20         # a page with fewer characters than this looks scanned
       resolution: 300
   # What one file may cost, and what one run may delete. A file over a limit is rejected with a
-  # named reason and the run carries on (context/safety-plan.md §4).
+  # named reason and the run carries on (docs/safety-considerations.md).
   limits:
     max_file_bytes: 104857600                 # 100 MiB on disk
     max_archive_uncompressed_bytes: 524288000 # DOCX/XLSX: what the archive declares it unpacks to
@@ -57,11 +49,11 @@ chunking:
   #     strategy: document_aware
   #     chunk_size: 400
   #     prose_splitting: paragraph
-  documents:
-    # REPLACE THIS with your own documents. These two are the sample corpus in data/sample,
-    # kept small on purpose so a clean clone can run `scripts/ingest.py --dry-run` immediately.
-    rag-overview.md: document_aware
-    pipeline-stages.txt: fixed_size
+  documents: {}
+  # List each file you add to data/documents, for example:
+  # documents:
+  #   handbook.md: document_aware
+  #   price-list.pdf: document_aware
 
 retrieval:
   top_k: 5

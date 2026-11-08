@@ -2,13 +2,13 @@ import logging
 
 import pytest
 
-from chunking.base import ChunkingStrategyError
-from chunking.document_aware import DocumentAwareChunker
-from chunking.factory import ConfiguredChunkers
-from chunking.fixed_size import FixedSizeChunker
-from chunking.tokenizer import build_tokenizer
-from extraction.base import ExtractedDocument
-from settings import ChunkingConfig
+from app.chunking.base import ChunkingStrategyError
+from app.chunking.document_aware import DocumentAwareChunker
+from app.chunking.factory import ConfiguredChunkers
+from app.chunking.fixed_size import FixedSizeChunker
+from app.chunking.tokenizer import build_tokenizer
+from app.extraction.base import ExtractedDocument
+from app.settings import ChunkingConfig
 from tests.support import plan, tokenizer, words
 
 
@@ -159,12 +159,12 @@ def test_one_chunker_is_reused_for_documents_with_the_same_plan() -> None:
 def test_chunk_logging_summarises_at_info_and_details_at_debug(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    from ingestion.pipeline import log_chunks
+    from app.ingestion.pipeline import log_chunks
 
     document_plan = plan(4, 1, strategy="fixed_size")
     chunks = FixedSizeChunker(document_plan, tokenizer()).chunk(doc(words(7)))
 
-    with caplog.at_level(logging.DEBUG, logger="ingestion.pipeline"):
+    with caplog.at_level(logging.DEBUG, logger="app.ingestion.pipeline"):
         log_chunks("a.txt", document_plan, chunks)
 
     info = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]

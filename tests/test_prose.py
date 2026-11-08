@@ -2,8 +2,8 @@
 
 import pytest
 
-from chunking.prose import SentenceWindowSplitter, WordWindowSplitter, build_prose_splitter
-from chunking.tokenizer import build_tokenizer
+from app.chunking.prose import SentenceWindowSplitter, WordWindowSplitter, build_prose_splitter
+from app.chunking.tokenizer import build_tokenizer
 from tests.support import tokenizer, words
 
 

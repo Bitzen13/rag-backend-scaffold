@@ -7,14 +7,14 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from chunking.base import Chunker, ChunkingStrategyError, ChunkPlan
-from chunking.fixed_size import FixedSizeChunker
-from chunking.tokenizer import WordTokenizer
-from db.models import EMBEDDING_DIMENSIONS, Chunk, ChunkVector, Source
-from embedding.base import EmbeddingError
-from extraction.base import ExtractedDocument, ExtractionError, SourceCandidate
-from extraction.limits import LimitExceededError
-from ingestion.pipeline import (
+from app.chunking.base import Chunker, ChunkingStrategyError, ChunkPlan
+from app.chunking.fixed_size import FixedSizeChunker
+from app.chunking.tokenizer import WordTokenizer
+from app.db.models import EMBEDDING_DIMENSIONS, Chunk, ChunkVector, Source
+from app.embedding.base import EmbeddingError
+from app.extraction.base import ExtractedDocument, ExtractionError, SourceCandidate
+from app.extraction.limits import LimitExceededError
+from app.ingestion.pipeline import (
     IngestionLimits,
     IngestionPipeline,
     MassDeletionError,
@@ -22,7 +22,7 @@ from ingestion.pipeline import (
     ProgressTracker,
     format_duration,
 )
-from vector_store.pgvector_store import PgVectorStore
+from app.vector_store.pgvector_store import PgVectorStore
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -315,7 +315,7 @@ async def test_the_reason_a_document_was_opened_is_logged(
     await make_pipeline(session, [doc("a.md", TEXT)], FakeEmbedder()).run()
     await session.commit()
 
-    with caplog.at_level(logging.INFO, logger="ingestion.pipeline"):
+    with caplog.at_level(logging.INFO, logger="app.ingestion.pipeline"):
         await make_pipeline(
             session, [doc("a.md", "entirely different text here")], FakeEmbedder()
         ).run()
@@ -458,7 +458,7 @@ def test_progress_logs_count_percent_and_time_remaining(caplog: pytest.LogCaptur
     now = [0.0]
     progress = ProgressTracker(total=200, clock=lambda: now[0])
 
-    with caplog.at_level(logging.INFO, logger="ingestion.pipeline"):
+    with caplog.at_level(logging.INFO, logger="app.ingestion.pipeline"):
         now[0] = 30.0
         progress.advance(50)  # 25% in 30s -> 90s left
         now[0] = 120.0
@@ -476,7 +476,7 @@ async def test_run_logs_what_it_opened_and_what_it_did_not(
     await make_pipeline(session, [doc("a.md", TEXT)], FakeEmbedder()).run()
     await session.commit()
 
-    with caplog.at_level(logging.INFO, logger="ingestion.pipeline"):
+    with caplog.at_level(logging.INFO, logger="app.ingestion.pipeline"):
         report = await make_pipeline(
             session, [], FakeEmbedder(), extractor=FakeExtractor([doc("a.md", TEXT)])
         ).run()
