@@ -67,19 +67,48 @@ first.
 
 ## Safety
 
-Anyone who can add a document can write instructions aimed at the model. The model has no tools,
-so the defences limit what a successful attack can achieve:
+**Threat model.** Anyone who can add a document controls text the model reads. Injection filters
+eventually fail against a determined attacker. This design assumes injection succeeds and limits
+what it can achieve. Every control runs outside the model, so a hijacked model can't disable it.
 
-- **Output checks.** Images and links not on an allow-list are removed from answers, excerpts and
-  source names, so an answer can't make the user's browser send data anywhere.
-- **The prompt can't be forged.** Document text and file names are escaped, so they can't break
-  out of the prompt section they belong to.
-- **File limits.** Oversized files, zip bombs, huge spreadsheets, YAML alias bombs and symlinks
-  out of the folder are each refused with a named reason, and the rest of the run carries on.
-- **Mass-deletion guard.** A run that would delete more than half the corpus stops before doing
-  anything.
+### Controls
 
-Each decision, and the tests that prove it, is in
+| Risk | Control | Why it's built this way |
+|---|---|---|
+| **The model takes an action** | No tools and no network access. | A hijacked model can only produce text. Adding tools means redoing this design first. |
+| **Data leaves through the answer** | All images are removed. Links are removed unless their host is allow-listed, and the list starts empty. Only `http` and `https` can pass. | An image fetches its URL on render, with no click. A removed link keeps its label, so the sentence still reads. |
+| **The output filter is bypassed** | Parses inline and reference-style Markdown, raw HTML, autolinks and bare URLs. Decodes each URL as a browser would. | Reference-style links got past the filter in EchoLeak. Checking one syntax isn't enough. |
+| **Unfiltered text reaches a client** | The same check covers answers, excerpts and source names. | Excerpts and file names never pass through the model. |
+| **A document forges the prompt** | Document text, file names and the question are escaped. Attribute values stay on one line. | `</context>` or `x.pdf" trust="official` stays inert data. Escaping protects structure, not model behaviour. |
+| **The model obeys a document** | The system prompt declares context untrusted. | Best effort only. No other control depends on it. |
+| **One file exhausts resources** | Limits on file size, declared archive size, spreadsheet cells, extracted text, chunks and metadata. YAML aliases aren't expanded. | Declared sizes are checked before expansion, so a 264-byte file can't become millions of values. The file is refused with a named reason and the run continues. |
+| **A file escapes the corpus** | Symlinks resolving outside the document folder are refused. | The check uses the directory entry, before any byte is read. |
+| **A bad run wipes the corpus** | A run deleting over 50% of sources stops before changing anything. `--allow-mass-delete` overrides one run. | An empty or unmounted folder looks exactly like every file being deleted. |
+| **A client renders hostile text** | `answer`, `excerpt` and `source_uri` are documented as untrusted. | The filter limits what's produced. Only the client can escape for its own rendering context. |
+| **Credentials leak** | API keys are stored as SHA-256 hashes and compared in constant time. Secrets come only from the environment. Log output is redacted. | Redaction sits in the formatter, so library logs and tracebacks can't bypass it. |
+| **The API is abused** | Per-key rate limits, a question length cap and database statement timeouts. CORS is off by default. | Limits are counted in Postgres, so all workers share one allowance. Long questions are refused before any paid call. |
+| **Admin routes are exposed** | Ingestion and key management aren't mounted unless an admin token is set. | A route that doesn't exist can't be attacked. |
+| **The deployment is too open** | The container runs as non-root and `/app` is read-only to it. Local Postgres binds to loopback. Documents and secrets stay out of the image. | The local password is public, so the port must not face a network. |
+
+### Verification
+
+- 11 attack documents run in CI against a fake model that obeys every instruction it finds.
+- That is the worst case, so a pass doesn't rely on a real model refusing.
+- Every leak and prompt-forgery attempt now fails: 0 of 9 succeed.
+- Each decision has a pytest marker, and each CI run publishes a per-decision evidence table.
+
+### Residual risk
+
+- A document can still make the model say something false. Only a real model can refuse that.
+- Every supported file in the document folder is ingested. Keep only searchable content there.
+
+### Deliberately not built
+
+Injection scanning, per-source trust levels, poisoned-document detection and audit trails. Each adds
+real complexity. The controls above already bound the damage, however an attack gets in. A large
+multi-user deployment should reconsider them.
+
+Full reasoning and the tests behind each decision:
 **[backend/docs/safety-considerations.md](backend/docs/safety-considerations.md)**.
 
 ## Metrics
