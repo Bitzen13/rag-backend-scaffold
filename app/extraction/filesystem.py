@@ -87,7 +87,10 @@ class FileCandidate(SourceCandidate):
 
 
 class FilesystemExtractor:
-    """Reads every file under a directory whose extension is listed in `extraction.extensions`.
+    """Reads every file under a directory with a wanted extension.
+
+    `extensions` lists the wanted ones; None means every extension that has a reader, so a file
+    type nothing can describe (an image, an archive) is left alone rather than read as text.
 
     The extractor decides which files to visit; the reader for each one decides how to describe
     it. Enumeration parses nothing: it hashes each file's bytes and names the reader that would
@@ -97,16 +100,17 @@ class FilesystemExtractor:
     def __init__(
         self,
         root: Path,
-        extensions: Sequence[str],
+        extensions: Sequence[str] | None = None,
         pdf_options: PdfOptions | None = None,
         registry: ReaderRegistry | None = None,
         extra_readers: Sequence[Reader] = (),
         limits: FileLimits | None = None,
     ) -> None:
         self._root = root
-        self._extensions = frozenset(e.lower() for e in extensions)
         self._limits = limits or FileLimits()
         self._registry = registry or build_registry(pdf_options, extra_readers, self._limits)
+        wanted = self._registry.extensions() if extensions is None else extensions
+        self._extensions = frozenset(e.lower() for e in wanted)
 
     @property
     def source_type(self) -> str:

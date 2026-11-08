@@ -2,7 +2,6 @@ import logging
 
 import pytest
 
-from app.chunking.base import ChunkingStrategyError
 from app.chunking.document_aware import DocumentAwareChunker
 from app.chunking.factory import ConfiguredChunkers
 from app.chunking.fixed_size import FixedSizeChunker
@@ -109,9 +108,10 @@ def test_each_document_uses_its_own_configured_strategy() -> None:
     assert resolved.strategy_for("b.pdf") == "document_aware"
 
 
-def test_unlisted_document_has_no_default_strategy() -> None:
-    with pytest.raises(ChunkingStrategyError, match=r"chunking\.documents"):
-        chunkers({"a.txt": "fixed_size"}).for_document("other.txt")
+def test_unlisted_document_defaults_to_document_aware() -> None:
+    resolved = chunkers({"a.txt": "fixed_size"})
+    assert isinstance(resolved.for_document("other.txt"), DocumentAwareChunker)
+    assert resolved.strategy_for("other.txt") == "document_aware"
 
 
 def test_unknown_strategy_rejected_by_config() -> None:

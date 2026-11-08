@@ -31,6 +31,11 @@ def test_any_accepted_url_ends_up_on_the_async_driver(given: str) -> None:
     assert to_async_url(given).startswith("postgresql+asyncpg://")
 
 
+def test_hosted_provider_url_options_are_translated_for_asyncpg() -> None:
+    given = "postgresql://u:p@db.example.com/app?sslmode=require&channel_binding=require&x=1"
+    assert to_async_url(given) == "postgresql+asyncpg://u:p@db.example.com/app?ssl=require&x=1"
+
+
 def test_a_url_that_is_not_postgres_is_rejected() -> None:
     with pytest.raises(ValueError, match="postgresql://"):
         to_async_url("mysql://rag@localhost/rag")

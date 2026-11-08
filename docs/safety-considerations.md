@@ -66,6 +66,10 @@ and metadata size. YAML is read without expanding its shortcuts. Files that poin
 document folder are refused. A file that breaks a limit is skipped with a clear reason, and the
 rest of the run carries on.
 
+Every file in the document folder whose type has a reader is ingested, without being listed
+anywhere, so keep only what should be searchable there. Other file types are ignored, not read as
+text.
+
 **Proven by:** [`tests/test_file_limits.py`](../tests/test_file_limits.py),
 [`tests/test_ingestion_pipeline.py`](../tests/test_ingestion_pipeline.py)
 

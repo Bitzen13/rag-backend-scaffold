@@ -33,6 +33,17 @@ def test_extracts_matching_files_recursively(tmp_path: Path) -> None:
     ]
 
 
+def test_unset_extensions_pick_up_every_type_with_a_reader(tmp_path: Path) -> None:
+    (tmp_path / "a.md").write_text("alpha", encoding="utf-8")
+    (tmp_path / "b.csv").write_text("x,y\n1,2\n", encoding="utf-8")
+    (tmp_path / "photo.png").write_bytes(b"\x89PNG")
+    (tmp_path / ".gitkeep").write_text("", encoding="utf-8")
+
+    extractor = build_extractor(ExtractionConfig(provider="filesystem", path=tmp_path))
+
+    assert [c.source_uri for c in extractor.candidates()] == ["a.md", "b.csv"]
+
+
 def test_metadata_records_the_file_and_the_reader_that_read_it(tmp_path: Path) -> None:
     (tmp_path / "a.md").write_text("# Title\n\nBody.\n", encoding="utf-8")
     (document,) = documents(tmp_path)

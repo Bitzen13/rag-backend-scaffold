@@ -1,17 +1,19 @@
 """Resolving each document's chunker from config: strategy, sizes, splitting mode, tokenizer."""
 
-from app.chunking.base import Chunker, ChunkingStrategyError, ChunkPlan
+from app.chunking.base import Chunker, ChunkPlan
 from app.chunking.document_aware import DocumentAwareChunker
 from app.chunking.fixed_size import FixedSizeChunker
 from app.chunking.tokenizer import Tokenizer, build_tokenizer
-from app.settings import ChunkingConfig, ChunkingStrategy, Settings
+from app.settings import ChunkingConfig, ChunkingStrategy, DocumentChunking, Settings
 
-STRATEGIES: tuple[ChunkingStrategy, ...] = ("fixed_size", "document_aware")
+# Follows whatever structure the file's reader found, so it suits every format without a choice.
+DEFAULT_STRATEGY: ChunkingStrategy = "document_aware"
 
 
 class ConfiguredChunkers:
-    """Resolves each document's plan and chunker from `chunking`; there is no default strategy.
+    """Resolves each document's plan and chunker from `chunking`.
 
+    A document with no entry under `chunking.documents` uses the default strategy and global sizes.
     One tokenizer is shared by every chunker, so its encoding is loaded once per run.
     """
 
@@ -31,12 +33,9 @@ class ConfiguredChunkers:
         return self.plan_for(source_uri).strategy
 
     def plan_for(self, source_uri: str) -> ChunkPlan:
-        entry = self._config.documents.get(source_uri)
-        if entry is None:
-            raise ChunkingStrategyError(
-                f"no chunking strategy set for {source_uri!r}: add it under chunking.documents "
-                f"in config.yaml (one of: {', '.join(STRATEGIES)})"
-            )
+        entry = self._config.documents.get(source_uri) or DocumentChunking(
+            strategy=DEFAULT_STRATEGY
+        )
         config = self._config
         return ChunkPlan(
             strategy=entry.strategy,

@@ -1,4 +1,4 @@
-"""Chunker contract. The strategy and options for each document come from `chunking.documents`."""
+"""Chunker contract. Each document's strategy and options are resolved from `chunking`."""
 
 from dataclasses import dataclass, field
 from typing import Protocol

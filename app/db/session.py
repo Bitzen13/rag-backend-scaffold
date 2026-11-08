@@ -10,6 +10,7 @@ retry of a statement that may have been a write is worse than the failure it hid
 """
 
 from typing import Any
+from urllib.parse import parse_qsl, urlencode
 
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -25,12 +26,24 @@ _ASYNC_DRIVER = "postgresql+asyncpg://"
 
 def to_async_url(database_url: str) -> str:
     """Rewrite a plain postgresql:// URL to use the asyncpg driver."""
-    if database_url.startswith(_ASYNC_DRIVER):
-        return database_url
-    for prefix in ("postgresql://", "postgres://"):
+    for prefix in (_ASYNC_DRIVER, "postgresql://", "postgres://"):
         if database_url.startswith(prefix):
-            return _ASYNC_DRIVER + database_url.removeprefix(prefix)
+            return _asyncpg_options(_ASYNC_DRIVER + database_url.removeprefix(prefix))
     raise ValueError("DATABASE_URL must start with postgresql:// or postgres://")
+
+
+def _asyncpg_options(url: str) -> str:
+    """Translate libpq URL options, which hosted providers include and asyncpg refuses.
+
+    `sslmode` is called `ssl` there and takes the same values; `channel_binding` has no equivalent.
+    """
+    base, _, query = url.partition("?")
+    options = [
+        ("ssl" if key == "sslmode" else key, value)
+        for key, value in parse_qsl(query, keep_blank_values=True)
+        if key != "channel_binding"
+    ]
+    return f"{base}?{urlencode(options)}" if options else base
 
 
 def database_url_from_settings(settings: Settings) -> str:

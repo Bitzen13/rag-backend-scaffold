@@ -63,7 +63,7 @@ class ChunkingConfig(_Section):
     tokenizer: TokenizerKind = "auto"
     prose_splitting: ProseSplitting = "paragraph"
     # Chunking settings per document, keyed by source_uri (path relative to extraction.path).
-    # Chosen manually: a document with no entry is not ingested.
+    # Overrides only: a document with no entry uses document_aware and the global sizes.
     documents: dict[str, DocumentChunking] = Field(default_factory=dict)
 
     @field_validator("documents", mode="before")
@@ -156,15 +156,16 @@ class ExtractionConfig(_Section):
     # Only what is implemented, so an unknown provider is a load-time error (see ModelsConfig).
     provider: Literal["filesystem"]
     path: Path
-    # Which files are picked up. The reader for each one is chosen by extension (see
-    # extraction/readers/registry.py); an extension with no reader is read as plain text.
-    extensions: tuple[str, ...] = Field(default=(".md", ".txt"), min_length=1)
+    # Which files are picked up. Unset means every extension with a reader (see
+    # extraction/readers/registry.py). An extension listed here with no reader is read as plain
+    # text.
+    extensions: tuple[str, ...] | None = Field(default=None, min_length=1)
     pdf: PdfConfig = Field(default_factory=PdfConfig)
     limits: ExtractionLimits = Field(default_factory=ExtractionLimits)
 
     @model_validator(mode="after")
     def _extensions_have_leading_dot(self) -> Self:
-        for extension in self.extensions:
+        for extension in self.extensions or ():
             if not extension.startswith(".") or len(extension) < 2:
                 raise ValueError(f"extension {extension!r} must look like '.md'")
         return self

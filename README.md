@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Bitzen13/rag-backend-scaffold/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Bitzen13/rag-backend-scaffold/actions/workflows/ci.yml)
 
-An API-only backend for answering questions from your own documents. It ingests a folder of files,
+An API-only backend for a custom Retrieval Augmented Generation system (RAG). It ingests a folder of files,
 stores them as searchable chunks in Postgres, and answers a question over a REST API. The model
 answers using only the passages it retrieved, and every answer cites its sources.
 
@@ -39,10 +39,10 @@ question ──► embed ─► vector search + keyword search ─► prompt ─
 ```bash
 pip install -r requirements-dev.txt
 cp .env.example .env                    # add your OPENAI_API_KEY and ANTHROPIC_API_KEY
-docker compose up -d                    # Postgres + pgvector on localhost
+docker compose up -d                    # Postgres + pgvector on localhost (or use your own, below)
 python -m alembic upgrade head          # create the schema
 
-# 1. Put your files in data/documents/ and list each one under chunking.documents in config.yaml
+# 1. Put your files in data/documents/ (file types and chunking are detected automatically)
 python scripts/ingest.py --dry-run      # preview the chunks (no database, no API keys)
 python scripts/ingest.py                # extract, chunk, embed and store
 
@@ -57,6 +57,12 @@ curl -X POST http://localhost:8000/api/query \
 
 Interactive API docs are at `http://localhost:8000/docs`. `python scripts/ask.py "question"` asks
 from the command line, without the API.
+
+**Using your own database.** Skip `docker compose up -d` and set `DATABASE_URL` in `.env` to any
+PostgreSQL that has pgvector 0.5 or later available. Connection strings from hosted providers work
+as they are, including `?sslmode=require`. The migrations enable the `vector` and `pg_trgm`
+extensions, so the role running them needs permission to do that, or an admin can enable both
+first.
 
 ## Safety
 
@@ -81,7 +87,7 @@ Each decision, and the tests that prove it, is in
 
 | Check | Result |
 |---|---|
-| Tests | 670 tests, about 90 of them against a real Postgres |
+| Tests | 672 tests, about 90 of them against a real Postgres |
 | Types | `mypy --strict`, no errors |
 | Lint and format | `ruff`, clean |
 | Production image | builds, and runs as a non-root user |

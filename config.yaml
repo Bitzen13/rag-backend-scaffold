@@ -1,10 +1,11 @@
 extraction:
   provider: filesystem
   path: data/documents          # put your documents here
-  # Which files are picked up. A reader is chosen per extension (extraction/readers/registry.py):
-  # .pdf, .md, .html, .docx, .csv/.tsv, .xlsx, .json/.yaml, .eml/.mbox, source code, and plain
-  # text as the fallback for anything else.
-  extensions: [.md, .txt, .pdf]
+  # Every file type with a reader is picked up and read by that reader, with nothing to set
+  # (extraction/readers/registry.py): .pdf, .md, .html, .docx, .csv/.tsv, .xlsx, .json/.yaml,
+  # .eml/.mbox, source code and plain text. Other files are ignored. To narrow this, or to read
+  # another type as plain text, list exactly the extensions you want:
+  # extensions: [.md, .txt, .pdf]
   # Corpus-specific cleanup for text extracted from PDFs. These are regular expressions and do not
   # affect how structure (headings, tables, columns) is detected, which is worked out per file.
   pdf:
@@ -41,19 +42,16 @@ chunking:
   # max_chunk_tokens: 8000
   tokenizer: auto                # auto (the embedding model's tokenizer) | words
   prose_splitting: sentence      # paragraph | sentence - where document_aware cuts long prose
-  # Pick a strategy for EACH document (key = path relative to extraction.path). A document that
-  # is not listed here is not ingested. Strategies: fixed_size | document_aware.
-  # A document may instead be given a mapping to override chunk_size, chunk_overlap or
-  # prose_splitting for that file alone:
+  # Nothing to list: every document uses document_aware, which follows the structure its reader
+  # found (tables, code, lists, sections). Add a document here (key = path relative to
+  # extraction.path) only to override that. Strategies: fixed_size | document_aware.
+  # documents:
+  #   notes.txt: fixed_size
   #   report.pdf:
   #     strategy: document_aware
   #     chunk_size: 400
   #     prose_splitting: paragraph
   documents: {}
-  # List each file you add to data/documents, for example:
-  # documents:
-  #   handbook.md: document_aware
-  #   price-list.pdf: document_aware
 
 retrieval:
   top_k: 5
