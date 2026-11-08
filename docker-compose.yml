@@ -1,4 +1,5 @@
 # Local development only. Production runs Gunicorn with Uvicorn workers.
+# Run from backend/ as `docker compose --env-file .env up -d`, so POSTGRES_* come from backend/.env.
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -11,7 +12,7 @@ services:
       - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./docker/initdb:/docker-entrypoint-initdb.d:ro
+      - ./backend/docker/initdb:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-rag} -d ${POSTGRES_DB:-rag}"]
       interval: 5s

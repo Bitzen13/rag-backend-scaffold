@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-API-only RAG backend. Read `README.md` for what it does and why, and
+API-only RAG backend. Read `../README.md` for what it does and why, and
 `docs/safety-considerations.md` before changing anything that touches documents, prompts or
 answers.
 
@@ -12,8 +12,10 @@ from environment variables (`.env`). No UI code.
 
 ## Commands
 
+Run from `backend/`; `docker-compose.yml`, `README.md` and the ignore files are one level up.
+
 ```bash
-docker compose up -d && python -m alembic upgrade head   # local database
+docker compose --env-file .env up -d && python -m alembic upgrade head   # local database
 ruff check . && ruff format --check . && mypy . && pytest   # must all pass before finishing
 python scripts/ingest.py --dry-run                         # chunk preview, no DB or keys
 ```

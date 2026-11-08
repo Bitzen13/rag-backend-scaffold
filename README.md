@@ -37,9 +37,10 @@ question ──► embed ─► vector search + keyword search ─► prompt ─
 ## Quick start
 
 ```bash
+cd backend                              # every command below runs from here
 pip install -r requirements-dev.txt
 cp .env.example .env                    # add your OPENAI_API_KEY and ANTHROPIC_API_KEY
-docker compose up -d                    # Postgres + pgvector on localhost (or use your own, below)
+docker compose --env-file .env up -d    # Postgres + pgvector on localhost (or use your own, below)
 python -m alembic upgrade head          # create the schema
 
 # 1. Put your files in data/documents/ (file types and chunking are detected automatically)
@@ -58,7 +59,7 @@ curl -X POST http://localhost:8000/api/query \
 Interactive API docs are at `http://localhost:8000/docs`. `python scripts/ask.py "question"` asks
 from the command line, without the API.
 
-**Using your own database.** Skip `docker compose up -d` and set `DATABASE_URL` in `.env` to any
+**Using your own database.** Skip the `docker compose` step and set `DATABASE_URL` in `.env` to any
 PostgreSQL that has pgvector 0.5 or later available. Connection strings from hosted providers work
 as they are, including `?sslmode=require`. The migrations enable the `vector` and `pg_trgm`
 extensions, so the role running them needs permission to do that, or an admin can enable both
@@ -79,7 +80,7 @@ so the defences limit what a successful attack can achieve:
   anything.
 
 Each decision, and the tests that prove it, is in
-**[docs/safety-considerations.md](docs/safety-considerations.md)**.
+**[backend/docs/safety-considerations.md](backend/docs/safety-considerations.md)**.
 
 ## Metrics
 
@@ -146,30 +147,33 @@ numbers here yet:
 ## Project layout
 
 ```
-app/                 the application
-  api/               FastAPI routes, auth, rate limiting, error shape
-  extraction/        readers per file format, file limits
-  chunking/          fixed-size and document-aware chunkers
-  embedding/         embedding providers
-  vector_store/      pgvector storage and search
-  retrieval/         vector + keyword search, merged
-  generation/        prompt template and LLM providers
-  safety/            output checks
-  ingestion/         the ingest pipeline and change detection
-  services/          wiring used by the API and the scripts
-  evaluation/        retrieval metrics, the evaluation set, the attack set
-  db/                models and repositories
-  main.py            app entry point
-  settings.py        typed config (config.yaml) and secrets (.env)
-migrations/          Alembic schema migrations
-scripts/             ingest, ask, evaluate, API keys, safety report
-tests/               pytest suite
-docs/                safety considerations
-data/documents/      your documents go here
-docker/              Gunicorn config and database init
-config.yaml          every tunable setting
+docker-compose.yml     local Postgres + pgvector
+backend/
+  app/                 the application
+    api/               FastAPI routes, auth, rate limiting, error shape
+    extraction/        readers per file format, file limits
+    chunking/          fixed-size and document-aware chunkers
+    embedding/         embedding providers
+    vector_store/      pgvector storage and search
+    retrieval/         vector + keyword search, merged
+    generation/        prompt template and LLM providers
+    safety/            output checks
+    ingestion/         the ingest pipeline and change detection
+    services/          wiring used by the API and the scripts
+    evaluation/        retrieval metrics, the evaluation set, the attack set
+    db/                models and repositories
+    main.py            app entry point
+    settings.py        typed config (config.yaml) and secrets (.env)
+  migrations/          Alembic schema migrations
+  scripts/             ingest, ask, evaluate, API keys, safety report
+  tests/               pytest suite
+  docs/                safety considerations
+  data/documents/      your documents go here
+  docker/              Gunicorn config and database init
+  Dockerfile           production image, built from the repo root
+  config.yaml          every tunable setting
 ```
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+MIT, see [LICENSE](backend/LICENSE).

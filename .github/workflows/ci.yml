@@ -40,6 +40,10 @@ jobs:
     env:
       TEST_DATABASE_URL: postgresql://rag:rag@localhost:5432/rag_test
 
+    defaults:
+      run:
+        working-directory: backend
+
     steps:
       - uses: actions/checkout@v4
 
@@ -47,7 +51,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-          cache-dependency-path: requirements-dev.txt
+          cache-dependency-path: backend/requirements-dev.txt
 
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
@@ -85,7 +89,7 @@ jobs:
       # The production image is part of the contract, so a change that breaks the build should
       # fail here rather than at deploy time.
       - name: Build the production image
-        run: docker build -t rag-backend:ci .
+        run: docker build -f backend/Dockerfile -t rag-backend:ci .
 
       - name: Confirm it runs as a non-root user
         run: |

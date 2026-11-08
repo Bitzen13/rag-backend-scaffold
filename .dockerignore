@@ -1,19 +1,21 @@
+# The build context is the repository root (see .github/workflows/ci.yml), so patterns are
+# written from there.
 # Keeps the build context small, and keeps anything that must not ship out of the image.
-.env
-.env.*
-!.env.example
+**/.env
+**/.env.*
+!**/.env.example
 .git
 .gitignore
-.venv
+**/.venv
 **/__pycache__
 **/*.pyc
-.mypy_cache
-.pytest_cache
-.ruff_cache
+**/.mypy_cache
+**/.pytest_cache
+**/.ruff_cache
 # Dry-run output and any local corpus: a client's documents are mounted, never baked in.
-chunked/
-data/
-tests/
-docs/
+backend/chunked/
+backend/data/
+backend/tests/
+backend/docs/
 docker-compose.yml
-Dockerfile
+backend/Dockerfile

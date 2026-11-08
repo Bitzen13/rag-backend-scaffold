@@ -1,5 +1,6 @@
 # Production image. One image serves every client: the client's own config.yaml, secrets and
 # documents are mounted or injected at run time, never baked in.
+# Build from the repository root, where .dockerignore is: docker build -f backend/Dockerfile .
 #
 # Two stages so the build tools that compile wheels do not ship to production. The runtime stage
 # installs nothing from the network: it copies the virtualenv the builder produced.
@@ -16,7 +17,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
-COPY requirements.txt ./
+COPY backend/requirements.txt ./
 RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
 
@@ -43,11 +44,11 @@ RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin rag
 COPY --from=builder /opt/venv /opt/venv
 
 WORKDIR /app
-COPY --chown=root:root alembic.ini config.yaml ./
-COPY --chown=root:root app ./app
-COPY --chown=root:root migrations ./migrations
-COPY --chown=root:root scripts ./scripts
-COPY --chown=root:root docker/gunicorn.conf.py ./docker/gunicorn.conf.py
+COPY --chown=root:root backend/alembic.ini backend/config.yaml ./
+COPY --chown=root:root backend/app ./app
+COPY --chown=root:root backend/migrations ./migrations
+COPY --chown=root:root backend/scripts ./scripts
+COPY --chown=root:root backend/docker/gunicorn.conf.py ./docker/gunicorn.conf.py
 
 USER rag
 
