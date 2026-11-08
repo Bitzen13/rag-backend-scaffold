@@ -62,6 +62,14 @@ stops start-up rather than falling back to none. A client's reader silently not 
 documents are ingested by the plain-text fallback, which looks like working software and returns
 wrong answers.
 
+**The model gets no tools and no network access.** It receives text and returns text, so the
+worst a prompt injection hidden in a document can do is change an answer. It cannot take an
+action or send data anywhere. No defence that relies on detecting injections is that strong,
+because an adaptive attacker can get past detection. This is also why the output checks in
+`safety-plan.md` concentrate on what an answer can make a client fetch. Adding a tool, an action,
+or retrieval driven by the model changes the threat model, so `safety-plan.md` must be revised
+first.
+
 ---
 
 ## Considered and not adopted

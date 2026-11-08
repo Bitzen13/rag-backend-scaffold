@@ -11,6 +11,7 @@ from typing import Any
 
 import yaml
 
+from extraction import yaml_safe
 from extraction.base import DocumentElement, ElementKind
 from extraction.elements import ElementList
 from extraction.readers.base import ReadResult, SectionStack
@@ -61,7 +62,9 @@ def split_table_row(line: str) -> list[str]:
 
 
 class MarkdownReader:
-    version = 1  # bump to force re-extraction of documents this reader read
+    # bump to force re-extraction of documents this reader read
+    # 2: front-matter YAML aliases are no longer expanded (extraction/yaml_safe.py)
+    version = 2
 
     @property
     def name(self) -> str:
@@ -91,7 +94,7 @@ class MarkdownReader:
         if match is None:
             return {}, text, 1
         try:
-            loaded = yaml.safe_load(match.group(1))
+            loaded = yaml_safe.load(match.group(1))
         except yaml.YAMLError as exc:
             logger.warning("ignoring unparseable front matter: %s", exc)
             loaded = None

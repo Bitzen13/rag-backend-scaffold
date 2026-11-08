@@ -9,6 +9,7 @@ config value. The dispatch is here so there is one place that knows what a provi
 from customisations import Customisation
 from extraction.base import Extractor
 from extraction.filesystem import FilesystemExtractor
+from extraction.limits import FileLimits
 from extraction.pdf import OcrSettings, PdfOptions
 from settings import ExtractionConfig
 
@@ -31,6 +32,15 @@ def build_pdf_options(config: ExtractionConfig) -> PdfOptions:
     )
 
 
+def build_file_limits(config: ExtractionConfig) -> FileLimits:
+    limits = config.limits
+    return FileLimits(
+        max_file_bytes=limits.max_file_bytes,
+        max_archive_uncompressed_bytes=limits.max_archive_uncompressed_bytes,
+        max_spreadsheet_cells=limits.max_spreadsheet_cells,
+    )
+
+
 def build_extractor(
     config: ExtractionConfig, customisation: Customisation | None = None
 ) -> Extractor:
@@ -48,6 +58,7 @@ def build_extractor(
             config.extensions,
             build_pdf_options(config),
             extra_readers=client.readers,
+            limits=build_file_limits(config),
         )
     factory = client.extractors.get(config.provider)
     if factory is not None:

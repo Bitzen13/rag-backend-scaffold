@@ -15,6 +15,7 @@ from typing import Any
 import yaml
 
 from db.models import JsonObject
+from extraction import yaml_safe
 from extraction.base import DocumentElement, ElementKind
 from extraction.elements import ElementList
 from extraction.readers.base import SECTION_SEPARATOR, ReaderError, ReadResult
@@ -57,7 +58,9 @@ def _record_keys(records: list[Json]) -> list[str]:
 class StructuredReader:
     """Reads .json, .jsonl/.ndjson and .yaml/.yml."""
 
-    version = 1  # bump to force re-extraction of documents this reader read
+    # bump to force re-extraction of documents this reader read
+    # 2: YAML aliases are no longer expanded (extraction/yaml_safe.py)
+    version = 2
 
     @property
     def name(self) -> str:
@@ -82,7 +85,7 @@ class StructuredReader:
         suffix = path.suffix.lower()
         if suffix in (".yaml", ".yml"):
             try:
-                yield from (d for d in yaml.safe_load_all(text) if d is not None)
+                yield from (d for d in yaml_safe.load_all(text) if d is not None)
             except yaml.YAMLError as exc:
                 raise ReaderError(f"could not parse {path.name} as YAML: {exc}") from exc
             return

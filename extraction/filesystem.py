@@ -3,11 +3,18 @@
 import hashlib
 import logging
 from collections.abc import Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from db.models import JsonObject
 from extraction.base import ExtractedDocument, ExtractionError, SourceCandidate
+from extraction.limits import (
+    FileLimits,
+    LimitExceededError,
+    check_archive,
+    check_size,
+    outside_root,
+)
 from extraction.pdf import PdfOptions
 from extraction.readers.base import Reader, ReaderError
 from extraction.readers.registry import ReaderRegistry, build_registry
@@ -39,10 +46,21 @@ class FileCandidate(SourceCandidate):
 
     path: Path
     parser: Reader
+    limits: FileLimits = field(default_factory=FileLimits)
+    # Set when enumeration already knows the file must not be opened (a symlink out of the
+    # corpus, a file over the size cap). Reported when the run reaches it, like any other
+    # failure, so the run carries on.
+    rejection: LimitExceededError | None = None
 
     def read(self) -> ExtractedDocument:
         try:
+            if self.rejection is not None:
+                raise self.rejection
+            check_size(self.path, self.limits)
+            check_archive(self.path, self.limits)
             result = self.parser.read(self.path)
+        except LimitExceededError as exc:
+            raise LimitExceededError(exc.reason, f"{self.source_uri}: {exc.detail}") from exc
         except (OSError, UnicodeDecodeError, ReaderError) as exc:
             raise ExtractionError(f"{self.source_uri}: {exc}") from exc
         except Exception as exc:  # a bug in one reader must not stop the whole run
@@ -83,10 +101,12 @@ class FilesystemExtractor:
         pdf_options: PdfOptions | None = None,
         registry: ReaderRegistry | None = None,
         extra_readers: Sequence[Reader] = (),
+        limits: FileLimits | None = None,
     ) -> None:
         self._root = root
         self._extensions = frozenset(e.lower() for e in extensions)
-        self._registry = registry or build_registry(pdf_options, extra_readers)
+        self._limits = limits or FileLimits()
+        self._registry = registry or build_registry(pdf_options, extra_readers, self._limits)
 
     @property
     def source_type(self) -> str:
@@ -99,15 +119,34 @@ class FilesystemExtractor:
             if not path.is_file() or path.suffix.lower() not in self._extensions:
                 continue
             reader = self._registry.for_path(path)
+            rejection = self._reject(path)
             yield FileCandidate(
                 source_type=SOURCE_TYPE,
                 source_uri=path.relative_to(self._root).as_posix(),
-                source_hash=self._hash(path),
+                # A rejected file is never read, not even to hash it: "" forces the open that
+                # reports the rejection.
+                source_hash="" if rejection is not None else self._hash(path),
                 reader=reader.name,
                 reader_version=reader.version,
                 path=path,
                 parser=reader,
+                limits=self._limits,
+                rejection=rejection,
             )
+
+    def _reject(self, path: Path) -> LimitExceededError | None:
+        """Decided from the directory entry alone, before a byte of the file is read."""
+        if outside_root(path, self._root):
+            return LimitExceededError(
+                "outside_corpus", "a symlink that resolves outside the extraction path"
+            )
+        try:
+            check_size(path, self._limits)
+        except LimitExceededError as exc:
+            return exc
+        except OSError:
+            return None  # hashing reports it
+        return None
 
     def _hash(self, path: Path) -> str:
         """The file's raw hash, or "" if it cannot be read — which forces an open, and so a

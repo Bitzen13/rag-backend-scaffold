@@ -11,6 +11,7 @@ Sources that no longer appear are marked deleted, and their chunks and vectors g
 
 import asyncio
 import hashlib
+import json
 import logging
 import time
 import uuid
@@ -27,6 +28,7 @@ from db.repositories.chunks import ChunkRepository, NewChunk
 from db.repositories.sources import SourceRepository, SourceState
 from embedding.base import EmbeddingError, EmbeddingProvider
 from extraction.base import ExtractedDocument, ExtractionError, Extractor, SourceCandidate
+from extraction.limits import LimitExceededError
 from ingestion.changes import plan_record, reason_to_open
 from vector_store.base import VectorRecord, VectorStore
 
@@ -44,6 +46,45 @@ class Outcome(StrEnum):
     SKIPPED = "skipped"
     REMOVED = "removed"
     FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class IngestionLimits:
+    """What one document may cost once read, and what one run may delete (`extraction.limits`).
+
+    The per-file limits that can be judged before a file is parsed live in `extraction/limits.py`;
+    these are the ones only the parsed result can answer.
+    """
+
+    max_extracted_chars: int = 20_000_000
+    max_chunks_per_document: int = 20_000
+    max_metadata_bytes: int = 64 * 1024
+    max_delete_fraction: float = 0.5
+
+
+class MassDeletionError(RuntimeError):
+    """A run would delete more of the stored corpus than `max_delete_fraction` allows."""
+
+
+def check_mass_deletion(
+    stored: dict[str, SourceState], present: set[str], max_fraction: float
+) -> list[str]:
+    """The sources a run would delete; raises MassDeletionError if that is too many of them.
+
+    An empty or wrongly mounted directory looks exactly like a corpus whose files were all
+    deleted, and ingestion deletes whatever is missing. Stopping before anything happens turns
+    that from a wiped corpus into an error message.
+    """
+    live = [uri for uri, state in stored.items() if state.status != SourceStatus.DELETED.value]
+    missing = sorted(uri for uri in live if uri not in present)
+    if live and missing and len(missing) / len(live) > max_fraction:
+        raise MassDeletionError(
+            f"this run would delete {len(missing)} of {len(live)} stored sources "
+            f"({len(missing) / len(live):.0%}), more than extraction.limits.max_delete_fraction "
+            f"({max_fraction:.0%}) allows. Check that the extraction path is mounted and "
+            "complete; if the deletion is intended, run scripts/ingest.py --allow-mass-delete"
+        )
+    return missing
 
 
 @dataclass(frozen=True)
@@ -176,14 +217,21 @@ class IngestionPipeline:
         embedder: EmbeddingProvider,
         session_factory: SessionFactory,
         vector_store_factory: VectorStoreFactory,
+        limits: IngestionLimits | None = None,
     ) -> None:
         self._extractor = extractor
         self._chunkers = chunkers
         self._embedder = embedder
         self._session_factory = session_factory
         self._vector_store_factory = vector_store_factory
+        self._limits = limits or IngestionLimits()
 
-    async def run(self) -> IngestionReport:
+    async def run(self, *, allow_mass_delete: bool = False) -> IngestionReport:
+        """Ingest what changed and remove what has gone.
+
+        Raises MassDeletionError, before opening or deleting anything, if the run would remove
+        more than `max_delete_fraction` of the stored sources, unless `allow_mass_delete`.
+        """
         source_type = self._extractor.source_type
         started = time.monotonic()
         # Enumeration is synchronous (it hashes files); keep it off the event loop.
@@ -195,6 +243,11 @@ class IngestionPipeline:
             len(candidates),
             len(stored),
             format_duration(time.monotonic() - started),
+        )
+
+        present = {c.source_uri for c in candidates}
+        check_mass_deletion(
+            stored, present, 1.0 if allow_mass_delete else self._limits.max_delete_fraction
         )
 
         report = IngestionReport()
@@ -211,9 +264,7 @@ class IngestionPipeline:
             report.results.append(await self._process(item))
             report.opened += 1
             progress.advance(1)
-        report.results.extend(
-            await self._remove_missing(source_type, stored, {c.source_uri for c in candidates})
-        )
+        report.results.extend(await self._remove_missing(source_type, stored, present))
         logger.info(
             "ingestion finished in %s: %s (%s)",
             format_duration(time.monotonic() - run_started),
@@ -259,7 +310,12 @@ class IngestionPipeline:
             logger.warning("failed to read %s: %s", uri, exc)
             return DocumentResult(uri, Outcome.FAILED, str(exc))
         try:
+            self._check_document(document)
             prepared = self._chunk(document, item.plan)
+            self._check_chunks(prepared)
+        except LimitExceededError as exc:
+            logger.warning("rejected %s: %s", uri, exc)
+            return DocumentResult(uri, Outcome.FAILED, str(exc))
         except ValueError as exc:
             logger.warning("failed to chunk %s: %s", uri, exc)
             return DocumentResult(uri, Outcome.FAILED, str(exc))
@@ -271,6 +327,33 @@ class IngestionPipeline:
         except Exception:
             logger.exception("unexpected error ingesting %s", uri)
             return DocumentResult(uri, Outcome.FAILED, "unexpected error")
+
+    def _check_document(self, document: ExtractedDocument) -> None:
+        """Refuse a document whose extracted text or metadata is too large, before chunking."""
+        limits = self._limits
+        if len(document.text) > limits.max_extracted_chars:
+            raise LimitExceededError(
+                "too_much_text",
+                f"{len(document.text):,} characters extracted, over "
+                f"extraction.limits.max_extracted_chars ({limits.max_extracted_chars:,})",
+            )
+        size = len(json.dumps(document.metadata, default=str, ensure_ascii=False).encode())
+        if size > limits.max_metadata_bytes:
+            raise LimitExceededError(
+                "metadata_too_large",
+                f"{size:,} bytes of metadata, over extraction.limits.max_metadata_bytes "
+                f"({limits.max_metadata_bytes:,})",
+            )
+
+    def _check_chunks(self, prepared: PreparedDocument) -> None:
+        """Refuse a document that chunks into more pieces than one document may cost to embed."""
+        limit = self._limits.max_chunks_per_document
+        if len(prepared) > limit:
+            raise LimitExceededError(
+                "too_many_chunks",
+                f"{len(prepared):,} chunks, over extraction.limits.max_chunks_per_document "
+                f"({limit:,})",
+            )
 
     def _chunk(self, document: ExtractedDocument, plan: ChunkPlan) -> PreparedDocument:
         uri = document.source_uri
@@ -409,11 +492,8 @@ class IngestionPipeline:
         not already deleted that is missing from it has gone. Each removal is its own
         transaction, so Postgres rows and vectors can never be left half-deleted.
         """
-        missing = sorted(
-            uri
-            for uri, state in stored.items()
-            if uri not in present and state.status != SourceStatus.DELETED.value
-        )
+        # The guard in `run` has already approved this many deletions.
+        missing = check_mass_deletion(stored, present, 1.0)
         results: list[DocumentResult] = []
         for uri in missing:
             try:

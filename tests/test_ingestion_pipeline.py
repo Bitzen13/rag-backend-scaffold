@@ -13,7 +13,15 @@ from chunking.tokenizer import WordTokenizer
 from db.models import EMBEDDING_DIMENSIONS, Chunk, ChunkVector, Source
 from embedding.base import EmbeddingError
 from extraction.base import ExtractedDocument, ExtractionError, SourceCandidate
-from ingestion.pipeline import IngestionPipeline, Outcome, ProgressTracker, format_duration
+from extraction.limits import LimitExceededError
+from ingestion.pipeline import (
+    IngestionLimits,
+    IngestionPipeline,
+    MassDeletionError,
+    Outcome,
+    ProgressTracker,
+    format_duration,
+)
 from vector_store.pgvector_store import PgVectorStore
 
 
@@ -116,6 +124,7 @@ def make_pipeline(
     *,
     plan: ChunkPlan = PLAN,
     extractor: FakeExtractor | None = None,
+    limits: IngestionLimits | None = None,
 ) -> IngestionPipeline:
     extractor = extractor or FakeExtractor(documents)
     known = {c.source_uri for c in extractor.candidates() if c.source_uri != "nostrategy.md"}
@@ -125,6 +134,7 @@ def make_pipeline(
         embedder=embedder,
         session_factory=lambda: session,
         vector_store_factory=PgVectorStore,
+        limits=limits,
     )
 
 
@@ -339,7 +349,9 @@ async def test_a_source_already_marked_deleted_is_not_removed_again(
 ) -> None:
     await make_pipeline(session, [doc("a.md", TEXT)], FakeEmbedder()).run()
     await session.commit()
-    await make_pipeline(session, [], FakeEmbedder(), extractor=FakeExtractor([])).run()
+    await make_pipeline(session, [], FakeEmbedder(), extractor=FakeExtractor([])).run(
+        allow_mass_delete=True
+    )
     await session.commit()
 
     report = await make_pipeline(session, [], FakeEmbedder(), extractor=FakeExtractor([])).run()
@@ -350,7 +362,9 @@ async def test_a_source_already_marked_deleted_is_not_removed_again(
 async def test_a_deleted_source_that_comes_back_is_ingested_again(session: AsyncSession) -> None:
     await make_pipeline(session, [doc("a.md", TEXT)], FakeEmbedder()).run()
     await session.commit()
-    await make_pipeline(session, [], FakeEmbedder(), extractor=FakeExtractor([])).run()
+    await make_pipeline(session, [], FakeEmbedder(), extractor=FakeExtractor([])).run(
+        allow_mass_delete=True
+    )
     await session.commit()
 
     extractor = FakeExtractor([doc("a.md", TEXT)])
@@ -470,3 +484,116 @@ async def test_run_logs_what_it_opened_and_what_it_did_not(
     messages = [r.getMessage() for r in caplog.records]
     assert "0 sources need opening; 1 are unchanged and will not be parsed" in messages
     assert report.opening_summary() == "opened 0 of 1 sources; 1 never had to be opened"
+
+
+# --- limits: a costly document is rejected with a named reason, and the run carries on ----------
+
+
+class RejectedCandidate(FakeCandidate):
+    def read(self) -> ExtractedDocument:
+        self.opened.append(self.source_uri)
+        raise LimitExceededError("file_too_large", f"{self.source_uri}: too big")
+
+
+@pytest.mark.safety_limits
+async def test_a_rejected_file_is_reported_by_name_and_the_run_continues(
+    session: AsyncSession,
+) -> None:
+    rejected = RejectedCandidate(
+        source_type="file",
+        source_uri="huge.md",
+        source_hash="",
+        reader="fake",
+        reader_version=1,
+        document=None,
+        opened=[],
+    )
+    report = await make_pipeline(session, [rejected, doc("a.md", TEXT)], FakeEmbedder()).run()
+
+    outcomes = {r.source_uri: (r.outcome, r.detail) for r in report.results}
+    assert outcomes["huge.md"][0] == Outcome.FAILED
+    assert "rejected (file_too_large)" in outcomes["huge.md"][1]
+    assert outcomes["a.md"][0] == Outcome.ADDED
+
+
+@pytest.mark.safety_limits
+@pytest.mark.parametrize(
+    ("limits", "document", "reason"),
+    [
+        (IngestionLimits(max_extracted_chars=20), doc("a.md", TEXT), "too_much_text"),
+        (IngestionLimits(max_chunks_per_document=2), doc("a.md", TEXT), "too_many_chunks"),
+        (
+            IngestionLimits(max_metadata_bytes=100),
+            ExtractedDocument("file", "a.md", TEXT, {"front_matter": "x" * 200}),
+            "metadata_too_large",
+        ),
+    ],
+)
+async def test_a_document_over_a_limit_is_not_embedded(
+    session: AsyncSession, limits: IngestionLimits, document: ExtractedDocument, reason: str
+) -> None:
+    embedder = FakeEmbedder()
+    report = await make_pipeline(session, [document], embedder, limits=limits).run()
+
+    (result,) = report.results
+    assert result.outcome == Outcome.FAILED
+    assert f"rejected ({reason})" in result.detail
+    assert embedder.calls == 0
+    assert await count(session, Source) == 0
+
+
+@pytest.mark.safety_deletion
+async def test_a_run_that_would_empty_the_corpus_stops_before_doing_anything(
+    session: AsyncSession,
+) -> None:
+    await make_pipeline(session, [doc("a.md", TEXT), doc("b.md", TEXT)], FakeEmbedder()).run()
+    await session.commit()
+
+    extractor = FakeExtractor([])  # an empty mount looks exactly like this
+    with pytest.raises(MassDeletionError, match="2 of 2"):
+        await make_pipeline(session, [], FakeEmbedder(), extractor=extractor).run()
+
+    assert await count(session, Chunk) == 6  # nothing was deleted
+    sources = (await session.execute(select(Source))).scalars().all()
+    assert {s.status for s in sources} == {"active"}
+
+
+@pytest.mark.safety_deletion
+async def test_a_run_that_would_delete_too_much_opens_nothing_either(
+    session: AsyncSession,
+) -> None:
+    await make_pipeline(
+        session, [doc("a.md", TEXT), doc("b.md", TEXT), doc("c.md", TEXT)], FakeEmbedder()
+    ).run()
+    await session.commit()
+
+    extractor = FakeExtractor([doc("a.md", "changed text")])  # 2 of 3 gone
+    with pytest.raises(MassDeletionError):
+        await make_pipeline(session, [], FakeEmbedder(), extractor=extractor).run()
+
+    assert extractor.opened == []
+
+
+@pytest.mark.safety_deletion
+async def test_allow_mass_delete_lets_one_run_empty_the_corpus(session: AsyncSession) -> None:
+    await make_pipeline(session, [doc("a.md", TEXT), doc("b.md", TEXT)], FakeEmbedder()).run()
+    await session.commit()
+
+    report = await make_pipeline(session, [], FakeEmbedder(), extractor=FakeExtractor([])).run(
+        allow_mass_delete=True
+    )
+
+    assert [r.outcome for r in report.results] == [Outcome.REMOVED, Outcome.REMOVED]
+    assert await count(session, Chunk) == 0
+
+
+@pytest.mark.safety_deletion
+async def test_deleting_within_the_fraction_needs_no_override(session: AsyncSession) -> None:
+    await make_pipeline(session, [doc("a.md", TEXT), doc("b.md", TEXT)], FakeEmbedder()).run()
+    await session.commit()
+
+    report = await make_pipeline(
+        session, [], FakeEmbedder(), extractor=FakeExtractor([doc("a.md", TEXT)])
+    ).run()
+
+    assert [r.source_uri for r in report.of(Outcome.REMOVED)] == ["b.md"]

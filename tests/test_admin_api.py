@@ -186,6 +186,17 @@ def test_a_wrong_admin_token_is_401(token: str) -> None:
     assert response.json()["code"] in {"missing_admin_token", "invalid_admin_token"}
 
 
+def test_a_non_ascii_admin_token_is_401_not_500() -> None:
+    """`compare_digest` raises on a non-ASCII str; comparing bytes keeps it a plain refusal."""
+    with admin() as ready:
+        response = ready.client.get(
+            "/internal/api-keys", headers={ADMIN_TOKEN_HEADER: "tökén-ü".encode()}
+        )
+
+    assert response.status_code == 401
+    assert response.json()["code"] == "invalid_admin_token"
+
+
 def test_a_consumer_api_key_cannot_reach_the_admin_surface() -> None:
     """The key a frontend holds must never be able to issue itself another one."""
     with admin() as ready:

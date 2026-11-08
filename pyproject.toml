@@ -26,6 +26,17 @@ exclude = ["^\\.venv/"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# One marker per decision in context/safety-considerations.md, so CI can report the evidence for
+# each one (scripts/safety_report.py). A test may carry more than one.
+markers = [
+    "safety_output: 1. images and links are removed from what reaches a client",
+    "safety_prompt: 2. the prompt's structure cannot be forged",
+    "safety_limits: 3. what a single file can cost is bounded",
+    "safety_deletion: 4. one bad run cannot wipe the corpus",
+    "safety_attacks: 5. the attack set, against a model that obeys everything",
+    "safety_untrusted: 6. document-derived fields are declared untrusted",
+]
+strict_markers = true
 
 [[tool.mypy.overrides]]
 # pdfplumber has no stubs; pytesseract is an optional dependency that may not be installed.

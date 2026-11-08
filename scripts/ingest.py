@@ -1,6 +1,6 @@
 """Ingest the configured source: extract, chunk, embed, and store.
 
-Usage: python scripts/ingest.py [--path DIR]
+Usage: python scripts/ingest.py [--path DIR] [--allow-mass-delete]
        python scripts/ingest.py --dry-run [--path DIR] [--qa-json FILE]
        python scripts/ingest.py --verbose   # also log every chunk
 
@@ -8,6 +8,9 @@ Usage: python scripts/ingest.py [--path DIR]
 quality report (sizes, oversized or empty chunks, duplicates, suspicious cuts); it needs no API
 keys or database and stores nothing. --qa-json writes that report as JSON, which is how a
 chunking baseline is recorded before changing chunking settings.
+
+A run that would delete more than extraction.limits.max_delete_fraction of the stored sources
+stops before doing anything; --allow-mass-delete lets this one run go ahead.
 """
 
 import argparse
@@ -107,7 +110,7 @@ async def main(args: argparse.Namespace) -> int:
         pipeline = build_ingestion_pipeline(
             settings, create_session_factory(engine), extraction=extraction
         )
-        report = await pipeline.run()
+        report = await pipeline.run(allow_mass_delete=args.allow_mass_delete)
     finally:
         await engine.dispose()
 
@@ -126,6 +129,11 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--verbose", action="store_true", help="log every chunk (index, size, metadata, preview)"
+    )
+    parser.add_argument(
+        "--allow-mass-delete",
+        action="store_true",
+        help="let this run delete more than extraction.limits.max_delete_fraction of the corpus",
     )
     args = parser.parse_args()
     install_handler(level=logging.INFO)  # replaced once settings load, with their secrets

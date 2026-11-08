@@ -125,6 +125,12 @@ traceable back to the source. Do not assign offsets by hand.
    `extraction.pdf.skip_sections` or `strip_patterns` changes the extracted text but is not part
    of the recorded plan. Bump `PdfReader.version` (or reset the affected sources) when you change
    those and want already-ingested PDFs re-read.
+10. **Bound what a file can cost.** A corpus is untrusted input, and a few KB can declare millions
+    of cells or expand into millions of values. Load YAML with `extraction/yaml_safe.py`, which
+    does not expand aliases. Check anything the file *declares* before iterating it, against
+    `extraction.limits`, the way `ExcelReader` checks a sheet's dimensions. Raise
+    `LimitExceededError` with a reason name. File size, zip-declared size and the extracted totals
+    are already checked for every reader (context/architecture-context.md §6).
 
 ## Testing a reader
 

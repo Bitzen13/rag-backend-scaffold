@@ -154,6 +154,14 @@ extraction:
       language: eng
       min_characters: 20
       resolution: 300
+  limits:                              # a file over one is rejected by name; the run carries on
+    max_file_bytes: 104857600
+    max_archive_uncompressed_bytes: 524288000  # DOCX/XLSX, as their zip directory declares
+    max_spreadsheet_cells: 2000000     # per sheet, from its declared dimensions
+    max_extracted_chars: 20000000
+    max_chunks_per_document: 20000
+    max_metadata_bytes: 65536
+    max_delete_fraction: 0.5           # a run deleting more stops first (--allow-mass-delete)
 
 chunking:
   chunk_size: 500                      # sizes are in TOKENS of the embedding model below
@@ -214,6 +222,10 @@ logging:
   level: INFO
   format: text                         # text | json - json is one object per line, for a shipper
 
+safety:
+  output:
+    allowed_link_hosts: []             # exact hosts whose links survive; images never do
+
 Secrets (ANTHROPIC_API_KEY, OPENAI_API_KEY, DATABASE_URL, VECTOR_DB_URL, and the optional
 ADMIN_API_TOKEN) come exclusively from environment variables.
 
@@ -225,6 +237,7 @@ Validation at load time, so a bad value fails loudly rather than producing bad c
 - **Auth:** the header named by `auth.api_key_header` (default `X-API-Key`), looked up by SHA-256 against `api_keys.key_hash` and rejected unless `is_active`. It is a FastAPI dependency, so it resolves *before* the body is validated: a request with no key never learns what the payload should look like, and never reaches retrieval.
 - **Request:** { "question": "string", "filters": { "source_type": "optional" } } — `question` is trimmed, must not be blank, and must be at most `api.max_question_chars`; an unknown field is rejected rather than ignored.
 - **Response:** { "answer": "string", "sources": [{ "chunk_id": "uuid", "source_uri": "string", "excerpt": "string" }] }
+- **Untrusted fields:** `answer`, `excerpt` and `source_uri` are derived from the ingested documents, and a document can contain anything. Before they leave the service, `safety/output.py` removes every image and every link whose host is not in `safety.output.allowed_link_hosts` (Markdown inline and reference-style, raw HTML, autolinks, bare URLs; never a `javascript:` or `data:` URL). That stops an answer making a client fetch a URL. It does not make the text safe to render: **a client must escape all three fields** before showing them as HTML or Markdown. A `source_uri` that contained a link comes back without it, so it can differ from the stored name; `chunk_id` is the exact reference.
 - **Errors:** every failure is `{ "error": string, "code": string }` (`api/errors.py`). `code` is the stable part; renaming one is a breaking change.
 
 | status | code | when |
@@ -299,14 +312,17 @@ Implemented in `ingestion/pipeline.py`, one transaction per document.
 
 Documents are then processed one at a time and streamed: nothing beyond a single document's chunks is ever held in memory. A changed source has its chunks and vectors replaced in the same transaction. A source that is opened but turns out to produce identical text has its new `source_hash` recorded and is not re-embedded.
 
-**Deletion comes for free from the candidate list**, which is exactly the set of sources that still exist. Anything stored, not already deleted, and missing from it is marked `deleted` and loses its chunks and vectors in one transaction.
+**Deletion comes for free from the candidate list**, which is exactly the set of sources that still exist. Anything stored, not already deleted, and missing from it is marked `deleted` and loses its chunks and vectors in one transaction. Because an empty or wrongly mounted directory looks exactly like a corpus whose files were all deleted, a run that would delete more than `extraction.limits.max_delete_fraction` of the live sources raises `MassDeletionError` before it opens or deletes anything; `scripts/ingest.py --allow-mass-delete` lets one run through. The admin route has no override, by design: an operator who means it uses the CLI.
+
+**What one file may cost is bounded** (`extraction.limits`, context/safety-plan.md §4). Enumeration refuses a symlink that resolves outside the extraction path and a file over `max_file_bytes` without reading either. Before a reader runs, a DOCX/XLSX whose zip directory declares more than `max_archive_uncompressed_bytes` is refused, and the Excel reader refuses a sheet whose declared dimensions exceed `max_spreadsheet_cells` before iterating it. YAML, both `.yaml` files and Markdown front matter, is loaded without expanding aliases (`extraction/yaml_safe.py`). After extraction, the pipeline refuses a document over `max_extracted_chars` or `max_metadata_bytes`, and one that chunks into more than `max_chunks_per_document`, before anything is embedded. Each refusal is a `LimitExceededError` whose message starts `rejected (<reason>)`. It is reported as that document's failure, and the run carries on.
 
 **Measurement.** `scripts/ingest.py --dry-run` reports chunk quality per document and for the corpus (size distribution, oversized, empty, undersized, duplicates, chunks that start mid-sentence or end mid-word, chunks that are mostly a URL), writes every chunk to `chunked/` for inspection, and can record the report as JSON; it needs no database and no API keys. `scripts/evaluate.py` measures retrieval itself — recall@k and MRR over `evaluation/questions.yaml`, through the same `Retriever` the API uses — and can record a baseline and fail on a regression against it. `--check-dataset` tells a typo in the evaluation set apart from a retrieval failure by re-chunking the corpus and reporting the cases no chunk can satisfy.
 
 **Query:** Client → /api/query (key validated, use recorded, rate limit enforced) → question
 embedded → vector similarity search (+ filters) **and** typo-tolerant keyword search → results
 merged (reciprocal rank fusion) → top-K chunks fetched from Postgres → prompt assembled → LLM call
-→ query logged → answer + citations returned
+→ output checks on the answer, excerpts and source names → query logged → answer + citations
+returned
 
 Everything before "question embedded" resolves as a FastAPI dependency, so an unauthenticated or
 over-limit request never reaches the expensive part, and never learns what the payload should look
@@ -318,7 +334,7 @@ like.
 - The internal admin surface has its own token in its own header and is not mounted without it; a consumer's API key can never reach it
 - All credentials via environment variables only
 - Input validation/size limits on /api/query before reaching the LLM call
-- Retrieved text is untrusted data: passages and their source names are escaped and delimited (`generation/prompt.py`), so a chunk cannot close `<context>`, open a `<question>`, or otherwise be promoted from data to instruction, and the system prompt says to ignore instructions inside it
+- Retrieved text is untrusted data: passages and their source names are escaped and delimited (`generation/prompt.py`), so a chunk cannot close `<context>`, open a `<question>`, or forge an attribute on its passage, and the system prompt says to ignore instructions inside it. That makes the prompt's *structure* unforgeable; it does not stop a model from following an instruction written in a passage, which no prompt can guarantee. What limits the damage is that the model has no tools (`design-decisions.md`) and that every answer, excerpt and source name passes the output checks in `safety/output.py` before it leaves the service (§5)
 - Timeouts everywhere a call leaves the process: the provider SDKs' own (bounded retries, from `models.*`), and a Postgres `statement_timeout` covering the vector search, the keyword search and every repository read. A query that would never return costs a 503, not a worker. Statements are deliberately not retried inside a request — a blind retry of a possible write is worse than the failure it hides — and `pool_pre_ping` covers the one case worth retrying transparently
 
 ### Logging: structured, and unable to leak a secret

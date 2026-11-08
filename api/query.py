@@ -43,16 +43,25 @@ class QueryRequest(BaseModel):
         return question
 
 
+UNTRUSTED = (
+    " Untrusted text derived from the ingested documents: images and links not on the "
+    "deployment's allow-list have been removed, but a client must still escape it before "
+    "rendering it as HTML or Markdown."
+)
+
+
 class QuerySource(BaseModel):
     """One retrieved chunk, traceable back to the document it came from."""
 
     chunk_id: uuid.UUID
-    source_uri: str
-    excerpt: str
+    source_uri: str = Field(description="The document's name, relative to its source." + UNTRUSTED)
+    excerpt: str = Field(description="The start of the retrieved chunk." + UNTRUSTED)
 
 
 class QueryResponse(BaseModel):
-    answer: str
+    answer: str = Field(
+        description="The model's answer. A retrieved document can influence it." + UNTRUSTED
+    )
     # Empty when nothing reached the similarity threshold. That is a normal answer, not an error:
     # the LLM is still called, with an empty context, so small talk still works and a factual
     # question is declined rather than fabricated.

@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 
+import observability
 from observability import (
     REDACTED,
     JsonFormatter,
@@ -91,10 +92,25 @@ def test_short_values_are_not_registered() -> None:
     assert redact("abc appears in abcdef") == "abc appears in abcdef"
 
 
-def test_ordinary_text_survives_untouched() -> None:
-    line = "chunked report.pdf: 512 chunks, tokens min/avg/max = 40/380/500"
-
+@pytest.mark.parametrize(
+    "line",
+    [
+        "chunked report.pdf: 512 chunks, tokens min/avg/max = 40/380/500",
+        "opening risk-management-policy.pdf: hash changed",  # `sk-` inside a word
+        "desk-booking-guide.md: 12 chunks",
+        "token count 512 exceeds the chunk size",  # `token` as an ordinary word
+        "the token is required; the api key header is missing",
+    ],
+)
+def test_ordinary_text_survives_untouched(line: str) -> None:
     assert redact(line) == line
+
+
+@pytest.mark.parametrize(
+    "value", ["token=abcdefghijklmnop", "token: abcdefghijklmnop", "API_KEY = abcdefghijklmnop"]
+)
+def test_a_token_or_key_assignment_is_still_redacted(value: str) -> None:
+    assert "abcdefghijklmnop" not in redact(f"config {value}")
 
 
 # --- redaction happens in the formatter, so nothing can route around it ---------------------------
@@ -205,11 +221,13 @@ def test_install_handler_replaces_its_own_handler_rather_than_stacking() -> None
     """Calling it twice must not double every line."""
     root = logging.getLogger()
     before = list(root.handlers)
+    # One installed by an earlier test (or script import) is replaced too, not added to.
+    others = [h for h in before if h is not observability._handler]
     try:
         install_handler(level=logging.INFO, stream=io.StringIO())
         install_handler(level=logging.INFO, stream=io.StringIO())
 
-        assert len(root.handlers) == len(before) + 1
+        assert len(root.handlers) == len(others) + 1
     finally:
         for handler in list(root.handlers):
             if handler not in before:

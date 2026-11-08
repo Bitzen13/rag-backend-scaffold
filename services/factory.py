@@ -6,6 +6,7 @@ from db.repositories.chunks import ChunkRepository
 from embedding.base import EmbeddingProvider
 from generation.base import LLMProvider
 from retrieval.retriever import Retriever
+from safety.output import OutputPolicy, OutputSanitizer
 from services.query_service import QueryService
 from settings import Settings
 from vector_store.pgvector_store import PgVectorStore
@@ -38,4 +39,5 @@ def build_query_service(
         ),
         llm=llm,
         excerpt_max_chars=retrieval.excerpt_max_chars,
+        output=OutputSanitizer(OutputPolicy.of(settings.safety.output.allowed_link_hosts)),
     )

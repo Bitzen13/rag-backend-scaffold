@@ -9,7 +9,7 @@ import customisations
 from chunking.factory import build_chunkers
 from embedding.factory import build_embedding_provider
 from extraction.factory import build_extractor
-from ingestion.pipeline import IngestionPipeline, SessionFactory
+from ingestion.pipeline import IngestionLimits, IngestionPipeline, SessionFactory
 from settings import ExtractionConfig, Settings
 from vector_store.pgvector_store import PgVectorStore
 
@@ -27,10 +27,18 @@ def build_ingestion_pipeline(
     run that has already spent money on embeddings.
     """
     client = customisations.load(settings.customisation)
+    config = extraction or settings.extraction
+    limits = config.limits
     return IngestionPipeline(
-        extractor=build_extractor(extraction or settings.extraction, client),
+        extractor=build_extractor(config, client),
         chunkers=build_chunkers(settings),
         embedder=build_embedding_provider(settings),
         session_factory=session_factory,
         vector_store_factory=PgVectorStore,
+        limits=IngestionLimits(
+            max_extracted_chars=limits.max_extracted_chars,
+            max_chunks_per_document=limits.max_chunks_per_document,
+            max_metadata_bytes=limits.max_metadata_bytes,
+            max_delete_fraction=limits.max_delete_fraction,
+        ),
     )

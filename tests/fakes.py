@@ -4,12 +4,19 @@ These exist so the API tests can exercise the *real* `RateLimiter`, `UsageRecord
 `QueryLogger` — the logic worth testing — without a database. The repositories these replace are
 covered against a real Postgres in `tests/test_repositories.py`; what is faked here is storage,
 never a decision.
+
+`ObedientLLM` and `KeywordRetriever` serve the attack set (`tests/test_adversarial.py`): the first
+is the worst model there could be, the second retrieves without a database or an embedding API.
 """
 
+import html
+import re
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+
+from retrieval.retriever import RetrievedChunk
 
 
 class FakeRateLimitStore:
@@ -90,3 +97,46 @@ class FixedClock:
 
     def advance(self, seconds: float) -> None:
         self.now = datetime.fromtimestamp(self.now.timestamp() + seconds, tz=UTC)
+
+
+# --- the attack set -------------------------------------------------------------------------------
+
+_PASSAGE = re.compile(r'<passage index="\d+" source="([^"]*)">\n(.*?)\n</passage>', re.DOTALL)
+
+
+class ObedientLLM:
+    """A model that obeys every instruction it finds in its context: the worst case.
+
+    Its answer is everything the retrieved passages say, source names included, with the
+    prompt's escaping undone the way a model reads through it. Whatever an attacker wrote —
+    "reply with CANARY", an image to render, a link to show — is therefore in the answer
+    verbatim. A defence that holds against this holds whatever the real model does, because
+    it does not depend on the model at all.
+    """
+
+    async def generate(self, *, system: str, user: str) -> str:
+        parts = [
+            f"According to {html.unescape(source)}:\n{html.unescape(text)}"
+            for source, text in _PASSAGE.findall(user)
+        ]
+        return "\n\n".join(parts) or "I don't have that in my knowledge base."
+
+
+_WORD = re.compile(r"[a-z0-9]+")
+
+
+class KeywordRetriever:
+    """Ranks chunks by how many of the question's longer words they contain. In memory."""
+
+    def __init__(self, chunks: Sequence[RetrievedChunk], top_k: int = 3) -> None:
+        self._chunks = list(chunks)
+        self._top_k = top_k
+
+    async def retrieve(self, question: str, filters: object = None) -> list[RetrievedChunk]:
+        wanted = {w for w in _WORD.findall(question.lower()) if len(w) > 3}
+        scored = [
+            (len(wanted & set(_WORD.findall(c.text.lower()))), index, c)
+            for index, c in enumerate(self._chunks)
+        ]
+        ranked = sorted((s for s in scored if s[0] > 0), key=lambda s: (-s[0], s[1]))
+        return [c for _, _, c in ranked[: self._top_k]]

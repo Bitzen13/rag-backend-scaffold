@@ -15,6 +15,7 @@ from typing import Any
 
 from db.models import JsonObject
 from extraction.elements import ElementList
+from extraction.limits import FileLimits, LimitExceededError, check_spreadsheet_cells
 from extraction.readers.base import ReaderError, ReadResult, require
 from extraction.tables import looks_like_header, table_row_element
 from extraction.text import decode_bytes, squash
@@ -142,6 +143,9 @@ class ExcelReader:
 
     version = 1  # bump to force re-extraction of documents this reader read
 
+    def __init__(self, max_cells: int = FileLimits.max_spreadsheet_cells) -> None:
+        self._max_cells = max_cells
+
     @property
     def name(self) -> str:
         return "excel"
@@ -160,10 +164,7 @@ class ExcelReader:
         sheets: list[str] = []
         try:
             for number, sheet in enumerate(workbook.worksheets, start=1):
-                rows = [
-                    [_cell_text(value) for value in row]
-                    for row in sheet.iter_rows(values_only=True)
-                ]
+                rows = self._rows(sheet)
                 written = _rows_to_elements(
                     rows, elements, table=str(sheet.title), section=str(sheet.title), page=number
                 )
@@ -173,6 +174,30 @@ class ExcelReader:
             workbook.close()
         document_text, placed = elements.build()
         return ReadResult(document_text, placed, {"sheets": sheets})
+
+    def _rows(self, sheet: Any) -> list[Row]:
+        """A sheet's rows, refused before iterating if its declared grid is too large.
+
+        In read-only mode every row is padded to the sheet's declared width, so a few KB that
+        declare `A1:FXX4000` cost millions of cells. The declared dimensions are checked first;
+        the running count covers a sheet that declares none.
+        """
+        title = str(sheet.title)
+        declared_rows, declared_columns = sheet.max_row, sheet.max_column
+        if declared_rows is not None and declared_columns is not None:
+            check_spreadsheet_cells(declared_rows, declared_columns, self._max_cells, sheet=title)
+        rows: list[Row] = []
+        cells = 0
+        for row in sheet.iter_rows(values_only=True):
+            cells += len(row)
+            if cells > self._max_cells:
+                raise LimitExceededError(
+                    "spreadsheet_too_large",
+                    f"sheet {title!r} holds more than extraction.limits.max_spreadsheet_cells "
+                    f"({self._max_cells:,}) cells",
+                )
+            rows.append([_cell_text(value) for value in row])
+        return rows
 
 
 def _cell_text(value: Any) -> str:

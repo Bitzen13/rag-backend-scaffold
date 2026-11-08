@@ -224,3 +224,6 @@ chunked/
 # reference a later run is compared against); per-run JSON reports are not. The template
 # ships no baselines - see evaluation/baselines/README.md.
 evaluation/runs/
+
+# Test results written by `pytest --junitxml` (CI publishes the summary instead)
+test-results.xml

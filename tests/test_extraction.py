@@ -9,6 +9,7 @@ import pytest
 from extraction.base import ElementKind, ExtractedDocument, ExtractionError, read_all
 from extraction.factory import build_extractor, build_pdf_options
 from extraction.filesystem import FilesystemExtractor, hash_file
+from extraction.readers.markdown import MarkdownReader
 from settings import ExtractionConfig
 
 TEXT_EXTENSIONS = (".md", ".txt")
@@ -38,7 +39,7 @@ def test_metadata_records_the_file_and_the_reader_that_read_it(tmp_path: Path) -
     assert document.metadata["filename"] == "a.md"
     assert document.metadata["extension"] == ".md"
     assert document.metadata["reader"] == "markdown"
-    assert document.metadata["reader_version"] == 1
+    assert document.metadata["reader_version"] == MarkdownReader.version
 
 
 def test_each_file_goes_to_the_reader_for_its_format(tmp_path: Path) -> None:
@@ -131,7 +132,10 @@ def test_candidates_identify_every_file_without_parsing_it(tmp_path: Path) -> No
     candidates = list(FilesystemExtractor(tmp_path, TEXT_EXTENSIONS).candidates())
 
     assert [c.source_uri for c in candidates] == ["a.md", "b.txt"]
-    assert [(c.reader, c.reader_version) for c in candidates] == [("markdown", 1), ("text", 1)]
+    assert [(c.reader, c.reader_version) for c in candidates] == [
+        ("markdown", MarkdownReader.version),
+        ("text", 1),
+    ]
     assert all(c.source_type == "file" for c in candidates)
 
 

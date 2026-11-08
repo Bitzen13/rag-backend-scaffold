@@ -39,6 +39,19 @@ extraction:
       language: eng
       min_characters: 20         # a page with fewer characters than this looks scanned
       resolution: 300
+  # What one file may cost, and what one run may delete. A file over a limit is rejected with a
+  # named reason and the run carries on (context/safety-plan.md §4).
+  limits:
+    max_file_bytes: 104857600                 # 100 MiB on disk
+    max_archive_uncompressed_bytes: 524288000 # DOCX/XLSX: what the archive declares it unpacks to
+    max_spreadsheet_cells: 2000000            # per sheet, from its declared dimensions
+    max_extracted_chars: 20000000
+    max_chunks_per_document: 20000
+    max_metadata_bytes: 65536                 # a document's metadata, serialised as JSON
+    # A run that would delete more than this share of the stored sources stops before doing
+    # anything (an empty mount would otherwise delete everything). One run can override it
+    # with `scripts/ingest.py --allow-mass-delete`.
+    max_delete_fraction: 0.5
 
 chunking:
   # Sizes are in tokens of the embedding model below, counted with its own tokenizer.
@@ -121,3 +134,10 @@ database:
 logging:
   level: INFO
   format: text                   # text | json - json is one object per line, for a log shipper
+
+safety:
+  output:
+    # Links in answers, excerpts and source names are removed unless their host is listed here
+    # (exact host names, http/https only). Images are always removed: rendering one fetches its
+    # URL with no click, which is how an injected instruction would leak data. Empty = no links.
+    allowed_link_hosts: []

@@ -56,6 +56,7 @@ COPY --chown=root:root generation ./generation
 COPY --chown=root:root ingestion ./ingestion
 COPY --chown=root:root migrations ./migrations
 COPY --chown=root:root retrieval ./retrieval
+COPY --chown=root:root safety ./safety
 COPY --chown=root:root scripts ./scripts
 COPY --chown=root:root services ./services
 COPY --chown=root:root vector_store ./vector_store

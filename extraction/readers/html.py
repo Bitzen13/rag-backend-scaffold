@@ -76,6 +76,20 @@ def strip_boilerplate(soup: Any) -> None:
             tag.decompose()
 
 
+def strip_comments(soup: Any) -> None:
+    """Remove comments, doctypes and processing instructions: markup, never content.
+
+    `get_text` skips them already, but a comment is a `str` subclass, so code that walks a tag's
+    children by hand (`_direct_text`) would otherwise read one as text.
+    """
+    from bs4 import Comment, Declaration, Doctype, ProcessingInstruction
+
+    for node in soup.find_all(
+        string=lambda s: isinstance(s, (Comment, Declaration, Doctype, ProcessingInstruction))
+    ):
+        node.extract()
+
+
 def _prose_length(tag: Any) -> int:
     return sum(len(block.get_text(" ", strip=True)) for block in tag.find_all(("p", "li", "td")))
 
@@ -115,7 +129,9 @@ def _direct_text(tag: Any) -> str:
 
 
 class HtmlReader:
-    version = 1  # bump to force re-extraction of documents this reader read
+    # bump to force re-extraction of documents this reader read
+    # 2: comments are no longer extracted as text (one inside an <li> used to be)
+    version = 2
 
     @property
     def name(self) -> str:
@@ -133,6 +149,7 @@ class HtmlReader:
             logger.warning("%s: removed %d invalid characters", path.name, removed)
         soup = bs4.BeautifulSoup(text, "html.parser")
         metadata = self._metadata(soup, encoding)
+        strip_comments(soup)
         strip_boilerplate(soup)
         root = main_content(soup)
         document_text, elements = _Walker(root).walk().build()

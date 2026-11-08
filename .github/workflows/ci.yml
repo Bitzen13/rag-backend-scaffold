@@ -62,7 +62,15 @@ jobs:
         run: mypy .
 
       - name: Test
-        run: pytest -q
+        run: pytest -q --junitxml=test-results.xml
+
+      # Writes the "Safety evidence" table to this run's Summary page: one row per decision in
+      # context/safety-considerations.md, from the results above (nothing is re-run except the
+      # attack set's table). Once per run rather than once per Python version, and even when a
+      # test failed, since that is when the table matters most.
+      - name: Safety evidence summary
+        if: ${{ !cancelled() && matrix.python-version == '3.12' }}
+        run: python scripts/safety_report.py --junit test-results.xml >> "$GITHUB_STEP_SUMMARY"
 
       # Proves a clean clone can chunk its corpus with no database and no API keys — the first
       # thing anyone starting from this template runs.

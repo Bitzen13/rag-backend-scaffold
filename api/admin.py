@@ -61,7 +61,9 @@ async def require_admin_token(
         )
     token = settings.secrets.admin_api_token
     expected = "" if token is None else token.get_secret_value()
-    if not expected or not hmac.compare_digest(presented, expected):
+    # Compared as bytes: `compare_digest` raises TypeError on a non-ASCII str, which a header
+    # value can be, and that would surface as a 500 rather than a 401.
+    if not expected or not hmac.compare_digest(presented.encode("utf-8"), expected.encode("utf-8")):
         raise ApiError(401, ErrorCode.INVALID_ADMIN_TOKEN, "admin token is not valid")
 
 

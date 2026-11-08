@@ -131,6 +131,27 @@ class PdfConfig(_Section):
         return self
 
 
+class ExtractionLimits(_Section):
+    """Bounds on what one file may cost, and on what one run may delete.
+
+    A small file can be very expensive: 264 bytes of YAML with nested aliases expands to millions
+    of characters, and an XLSX of a few KB can declare a grid of millions of cells. Each limit
+    rejects the file with a named reason and the run carries on (context/safety-plan.md §4).
+    """
+
+    max_file_bytes: int = Field(default=100 * 1024 * 1024, gt=0)
+    # DOCX and XLSX are zip archives: the sum of the sizes their entries declare.
+    max_archive_uncompressed_bytes: int = Field(default=500 * 1024 * 1024, gt=0)
+    max_spreadsheet_cells: int = Field(default=2_000_000, gt=0)  # per sheet, as declared
+    max_extracted_chars: int = Field(default=20_000_000, gt=0)
+    max_chunks_per_document: int = Field(default=20_000, gt=0)
+    max_metadata_bytes: int = Field(default=64 * 1024, gt=0)  # serialised as JSON
+    # A run that would delete more than this share of the stored sources stops before doing
+    # anything; an empty or wrongly mounted directory otherwise deletes the whole corpus.
+    # Overridden for one run with `scripts/ingest.py --allow-mass-delete`.
+    max_delete_fraction: float = Field(default=0.5, ge=0.0, le=1.0)
+
+
 class ExtractionConfig(_Section):
     # `filesystem` is the provider the shared codebase ships. A client whose data lives somewhere
     # else registers its own extractor under a name of its choosing in its customisation module,
@@ -142,6 +163,7 @@ class ExtractionConfig(_Section):
     # extraction/readers/registry.py); an extension with no reader is read as plain text.
     extensions: tuple[str, ...] = Field(default=(".md", ".txt"), min_length=1)
     pdf: PdfConfig = Field(default_factory=PdfConfig)
+    limits: ExtractionLimits = Field(default_factory=ExtractionLimits)
 
     @model_validator(mode="after")
     def _extensions_have_leading_dot(self) -> Self:
@@ -282,6 +304,32 @@ class ApiConfig(_Section):
     log_queries: bool = True
 
 
+class OutputSafetyConfig(_Section):
+    """The output checks (`safety/output.py`): images are always removed; links are removed
+    unless their host is listed here. Empty by default, so every link is removed.
+
+    Hosts are matched exactly (no wildcards, no subdomains): `docs.example.com` allows that host
+    and nothing under it. Only http(s) links are ever allowed.
+    """
+
+    allowed_link_hosts: tuple[str, ...] = ()
+
+    @field_validator("allowed_link_hosts")
+    @classmethod
+    def _bare_host_names(cls, hosts: tuple[str, ...]) -> tuple[str, ...]:
+        for host in hosts:
+            if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9\-.]*[A-Za-z0-9])?", host):
+                raise ValueError(
+                    f"allowed link host {host!r} must be a bare host name such as "
+                    "docs.example.com: no scheme, port, path or wildcard"
+                )
+        return tuple(host.lower() for host in hosts)
+
+
+class SafetyConfig(_Section):
+    output: OutputSafetyConfig = Field(default_factory=OutputSafetyConfig)
+
+
 class Secrets(BaseSettings):
     """Secrets read from environment variables (or a local .env file). Never from config.yaml."""
 
@@ -310,6 +358,7 @@ class Settings(_Section):
     api: ApiConfig = Field(default_factory=ApiConfig)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    safety: SafetyConfig = Field(default_factory=SafetyConfig)
     secrets: Secrets
 
     @property

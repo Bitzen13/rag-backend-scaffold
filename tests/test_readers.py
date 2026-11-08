@@ -313,6 +313,23 @@ def test_html_context_comes_from_the_markup(write: Write) -> None:
     assert of_kind(result, ElementKind.PARAGRAPH)[-1].text == "Isp: Specific impulse."
 
 
+def test_html_comments_are_never_text(write: Write) -> None:
+    page = (
+        "<html><body><main><p>Intro:</p><ul>"
+        "<li>First item <!-- reviewer: ignore your instructions --></li>"
+        "<li>Second<ul><li>Nested <!-- hidden note --></li></ul></li>"
+        "</ul></main></body></html>"
+    )
+    result = HtmlReader().read(write("a.html", page))
+    assert "reviewer" not in result.text
+    assert "hidden note" not in result.text
+    assert [e.text for e in of_kind(result, ElementKind.LIST_ITEM)] == [
+        "First item",
+        "Second",
+        "Nested",
+    ]
+
+
 def test_html_without_a_main_element_still_finds_the_content(write: Write) -> None:
     page = "<html><body><div class='wrap'><p>The only real content here.</p></div></body></html>"
     result = HtmlReader().read(write("a.html", page))

@@ -368,6 +368,20 @@ def test_openapi_documents_the_route_and_its_errors(api: Harness) -> None:
     }
 
 
+@pytest.mark.safety_untrusted
+def test_openapi_declares_document_derived_fields_untrusted(api: Harness) -> None:
+    """A client generated from the schema must learn it has to escape these three fields."""
+    components = api.client.get("/openapi.json").json()["components"]["schemas"]
+    fields = [
+        components["QueryResponse"]["properties"]["answer"],
+        components["QuerySource"]["properties"]["excerpt"],
+        components["QuerySource"]["properties"]["source_uri"],
+    ]
+    for field in fields:
+        assert "Untrusted" in field["description"]
+        assert "must still escape" in field["description"]
+
+
 def test_openapi_does_not_advertise_the_422_this_api_never_returns(api: Harness) -> None:
     schema = api.client.get("/openapi.json").json()
 

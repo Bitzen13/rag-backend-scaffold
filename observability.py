@@ -30,8 +30,12 @@ MIN_SECRET_LENGTH = 8  # shorter than this is not a secret, and blanking it woul
 # exactly why keys carry it: a leaked one is recognisable in a paste, and matchable here.
 _PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"rag_[A-Za-z0-9_\-]{8,}"),
-    re.compile(r"sk-[A-Za-z0-9_\-]{8,}"),  # OpenAI and Anthropic keys
-    re.compile(r"(?i)\b(?:bearer|token|api[-_ ]?key)\b[=:\s]+\S+"),
+    # OpenAI and Anthropic keys. The left boundary stops `risk-management-policy.pdf` matching.
+    re.compile(r"(?<![A-Za-z0-9_\-])sk-[A-Za-z0-9_\-]{8,}"),
+    re.compile(r"(?i)\bbearer\s+\S+"),
+    # `token` and `api key` only as an assignment (`token=...`, `api-key: ...`), so ordinary prose
+    # such as "token count 512" or "the token is required" is left alone.
+    re.compile(r"(?i)\b(?:token|api[-_ ]?key)\b\s*[=:]\s*\S+"),
     # A password inside a connection URL: postgresql://user:password@host/db
     re.compile(r"(?<=://)([^:/\s@]+):([^@/\s]+)(?=@)"),
 )

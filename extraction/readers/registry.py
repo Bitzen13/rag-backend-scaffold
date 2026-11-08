@@ -13,6 +13,7 @@ import logging
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
+from extraction.limits import FileLimits
 from extraction.pdf import PdfOptions
 from extraction.readers.base import Reader
 from extraction.readers.code import CodeReader
@@ -53,9 +54,12 @@ class ReaderRegistry:
 
 
 def build_registry(
-    pdf_options: PdfOptions | None = None, extra: Sequence[Reader] = ()
+    pdf_options: PdfOptions | None = None,
+    extra: Sequence[Reader] = (),
+    limits: FileLimits | None = None,
 ) -> ReaderRegistry:
     fallback = PlainTextReader()
+    limits = limits or FileLimits()
     return ReaderRegistry(
         [
             # First wins (`setdefault` per extension), so a client's reader takes precedence.
@@ -65,7 +69,7 @@ def build_registry(
             HtmlReader(),
             DocxReader(),
             CsvReader(),
-            ExcelReader(),
+            ExcelReader(max_cells=limits.max_spreadsheet_cells),
             StructuredReader(),
             EmailReader(),
             CodeReader(),
